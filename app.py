@@ -5,6 +5,7 @@ import requests
 import json
 import re
 from datetime import datetime, timezone
+import streamlit as st
 
 # --- .envファイルを読み込む ---
 load_dotenv()
