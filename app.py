@@ -278,8 +278,8 @@ term = st.text_input(
 col1, col2, col3 = st.columns([2, 2, 1])
 run  = col1.button("📌 Notion に登録 / 更新")
 demo = col2.button("🧪 サンプルでテスト", help="network, latency でテストします")
-# ❌ クリアは on_click で state を更新（rerun は不要）
-col3.button("❌ クリア", help="入力を空にします", on_click=_clear_term)
+# 🫧 クリアは on_click で state を更新（rerun は不要）
+col3.button("🫧 クリア", help="入力を空にします", on_click=_clear_term)
 
 # デモ押下時：state に直接セット（rerun 不要）
 if demo and not st.session_state["term_input"]:
