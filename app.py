@@ -114,8 +114,6 @@ IMPORTANT:
     return base
 
 def heuristic_tags(word: str) -> set:
-    # （略）— 長いのであなたの元コードのままでもOK
-    # 短くするため、最低限だけ：
     w = word.lower()
     tags = set()
     if any(k in w for k in ["summit","sanction","minister","administration","diplomacy"]):
@@ -171,14 +169,14 @@ def safe_property_add(props, key, value, is_title=False, is_multi=False):
     else:
         props[key] = {"rich_text":[{"text":{"content":value}}]}
 
-# ========== 1件処理の本体（input() は使わず関数化） ==========
+# ========== 1件処理の本体 ==========
 def process_word(word: str) -> dict:
     word = re.sub(r"\bbring\s+.+?\s+to the table\b", "bring something to the table", word.strip(), flags=re.I)
     prompt = build_prompt(word)
 
     # OpenAI 呼び出し
     resp = client.chat.completions.create(
-        model="gpt-4o-mini",  # Cloudは3.5よりこっちが安定
+        model="gpt-4o-mini",
         messages=[{"role":"user","content":prompt}],
         max_tokens=280,
         temperature=0,
@@ -262,30 +260,44 @@ with st.expander("🔑 接続状態", expanded=False):
     if not ok:
         st.warning("Secrets もしくは .env を設定してください。")
 
-term = st.text_input("追加したい単語・フレーズを入力（例: bring something to the table）")
-col1, col2 = st.columns(2)
-run = col1.button("Notion に登録 / 更新")
+# ---- 入力欄：キーを付与して session_state と同期 ----
+term = st.text_input(
+    "追加したい単語・フレーズを入力（例: bring something to the table）",
+    key="term_input"
+)
+
+# ---- ボタン：3列にして右端にクリア配置 ----
+col1, col2, col3 = st.columns([2, 2, 1])
+run = col1.button("📌 Notion に登録 / 更新")
 demo = col2.button("サンプルでテスト", help="network, latency でテストします")
 
-if demo and not term:
-    term = "network latency"
+# ❌ 入力クリアボタン
+if col3.button("🫧 クリア", help="入力を空にします"):
+    st.session_state.term_input = ""
+    st.rerun()
 
+# デモ押下時：UIの入力欄にも反映させる
+if demo and not st.session_state.get("term_input"):
+    st.session_state.term_input = "network latency"
+    st.rerun()
+
+# 実行
 if run:
-    if not term.strip():
+    if not st.session_state.get("term_input", "").strip():
         st.error("📌 単語・フレーズを入力してください。")
     else:
         with st.spinner("OpenAI → Notion 連携中…"):
             try:
-                result = process_word(term.strip())
+                result = process_word(st.session_state.term_input.strip())
                 st.success("☑️ 処理が完了しました！ 🎉")
-                st.write("📘 **Word**:", result["word"])
-                st.write("🧸 **POS**:", result["pos"])
-                st.write("🍪 **Definition (JP)**:", result["definition_jp"])
-                st.write("🩰 **Example**:", result["example"])
-                st.write("🎧 **IPA**:", result["ipa"])
-                st.write("🍕 **Stress**:", result["stress"])
-                st.write("🎀 **Katakana**:", result["katakana"])
-                st.write("🍩 **Tags**:", result["tags"])
+                st.write("**Word**:", result["word"])
+                st.write("**POS**:", result["pos"])
+                st.write("**Definition (JP)**:", result["definition_jp"])
+                st.write("**Example**:", result["example"])
+                st.write("**IPA**:", result["ipa"])
+                st.write("**Stress**:", result["stress"])
+                st.write("**Katakana**:", result["katakana"])
+                st.write("**Tags**:", result["tags"])
                 kind, code, body = result["notion_result"]
                 st.write(f"**Notion**: {kind} → status {code}")
                 if code not in (200, 201):
