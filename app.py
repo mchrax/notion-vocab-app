@@ -272,20 +272,20 @@ if demo and not term:
 
 if run:
     if not term.strip():
-        st.error("単語・フレーズを入力してください。")
+        st.error("📌 単語・フレーズを入力してください。")
     else:
         with st.spinner("OpenAI → Notion 連携中…"):
             try:
                 result = process_word(term.strip())
-                st.success("☑️処理が完了しました。")
-                st.write("📘**Word**:", result["word"])
-                st.write("🧸**POS**:", result["pos"])
-                st.write("🍪**Definition (JP)**:", result["definition_jp"])
-                st.write("🩰**Example**:", result["example"])
-                st.write("🎧**IPA**:", result["ipa"])
-                st.write("🍕**Stress**:", result["stress"])
-                st.write("🎀**Katakana**:", result["katakana"])
-                st.write("🍩**Tags**:", result["tags"])
+                st.success("☑️ 処理が完了しました！ 🎉")
+                st.write("📘 **Word**:", result["word"])
+                st.write("🧸 **POS**:", result["pos"])
+                st.write("🍪 **Definition (JP)**:", result["definition_jp"])
+                st.write("🩰 **Example**:", result["example"])
+                st.write("🎧 **IPA**:", result["ipa"])
+                st.write("🍕 **Stress**:", result["stress"])
+                st.write("🎀 **Katakana**:", result["katakana"])
+                st.write("🍩 **Tags**:", result["tags"])
                 kind, code, body = result["notion_result"]
                 st.write(f"**Notion**: {kind} → status {code}")
                 if code not in (200, 201):
