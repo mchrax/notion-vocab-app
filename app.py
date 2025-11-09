@@ -260,35 +260,40 @@ with st.expander("🔑 接続状態", expanded=False):
     if not ok:
         st.warning("Secrets もしくは .env を設定してください。")
 
-# ---- 入力欄：キーを付与して session_state と同期 ----
+# --- ここを追加：キーを先に初期化（辞書スタイル推奨） ---
+if "term_input" not in st.session_state:
+    st.session_state["term_input"] = ""
+
+# --- クリア用コールバック（ここで state を更新） ---
+def _clear_term():
+    st.session_state["term_input"] = ""
+
+# 入力欄（key を必ず付ける）
 term = st.text_input(
     "追加したい単語・フレーズを入力（例: bring something to the table）",
     key="term_input"
 )
 
-# ---- ボタン：3列にして右端にクリア配置 ----
-col1, col2, col3 = st.columns([2, 2, 2])
-run = col1.button("📌 Notion に登録 / 更新")
-demo = col3.button("🧸 サンプルでテスト", help="network, latency でテストします")
+# ボタンは3列に
+col1, col2, col3 = st.columns([2, 2, 1])
+run  = col1.button("📌 Notion に登録 / 更新")
+demo = col2.button("🧪 サンプルでテスト", help="network, latency でテストします")
+# ❌ クリアは on_click で state を更新（rerun は不要）
+col3.button("❌ クリア", help="入力を空にします", on_click=_clear_term)
 
-# ❌ 入力クリアボタン
-if col2.button("🫧 クリア", help="入力を空にします"):
-    st.session_state.term_input = ""
-    st.rerun()
-
-# デモ押下時：UIの入力欄にも反映させる
-if demo and not st.session_state.get("term_input"):
-    st.session_state.term_input = "network latency"
-    st.rerun()
+# デモ押下時：state に直接セット（rerun 不要）
+if demo and not st.session_state["term_input"]:
+    st.session_state["term_input"] = "network latency"
 
 # 実行
 if run:
-    if not st.session_state.get("term_input", "").strip():
+    term_val = st.session_state["term_input"].strip()
+    if not term_val:
         st.error("📌 単語・フレーズを入力してください。")
     else:
         with st.spinner("OpenAI → Notion 連携中…"):
             try:
-                result = process_word(st.session_state.term_input.strip())
+                result = process_word(term_val)
                 st.success("☑️ 処理が完了しました！ 🎉")
                 st.write("**Word**:", result["word"])
                 st.write("**POS**:", result["pos"])
