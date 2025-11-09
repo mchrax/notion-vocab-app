@@ -269,10 +269,10 @@ term = st.text_input(
 # ---- ボタン：3列にして右端にクリア配置 ----
 col1, col2, col3 = st.columns([2, 2, 1])
 run = col1.button("📌 Notion に登録 / 更新")
-demo = col2.button("サンプルでテスト", help="network, latency でテストします")
+demo = col3.button("サンプルでテスト", help="network, latency でテストします")
 
 # ❌ 入力クリアボタン
-if col3.button("🫧 クリア", help="入力を空にします"):
+if col2.button("🫧 クリア", help="入力を空にします"):
     st.session_state.term_input = ""
     st.rerun()
 
