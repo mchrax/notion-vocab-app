@@ -80,11 +80,20 @@ ALLOWED_TAGS = {
 def is_phrase(term: str) -> bool:
     return bool(re.search(r"[\s\-]", term.strip()))
 
+def is_gerund_phrase(term: str) -> bool:
+    """
+    動名詞句: 先頭語が -ing で、かつ2語以上（例: 'going abroad', 'being honest', 'having finished lunch'）
+    """
+    t = term.strip()
+    parts = re.findall(r"[A-Za-z']+", t)
+    return len(parts) >= 2 and parts[0].lower().endswith("ing")
+
 def build_prompt(word: str, strict_idiom: bool=False) -> str:
     base = f"""
 You are a lexicographer and register expert. Provide the following for '{word}'.
 
-1) Part of Speech (choose exactly one): Noun | Verb | Adjective | Adverb | Preposition | Phrase
+1) Part of Speech (choose exactly one): Noun | Verb | Adjective | Adverb | Preposition | Phrase | Gerund Phrase
+- If it is a gerund phrase beginning with an -ing form (e.g., "being honest", "going abroad"), choose "Gerund Phrase".
 2) Definition in Japanese (accurate, concise)
 3) A simple example sentence in **English only**
 4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style. Example: ˌpɑːr.ləˈmen.tri
@@ -190,7 +199,8 @@ def process_word(word: str) -> dict:
                 return ln.replace(prefix,"").strip()
         return default
 
-    pos_raw         = pick("Part of Speech:", "Phrase" if is_phrase(word) else "Noun")
+    default_pos = "Gerund Phrase" if is_gerund_phrase(word) else ("Phrase" if is_phrase(word) else "Noun")
+    pos_raw = pick("Part of Speech:", default_pos)
     definition_jp   = pick("Definition (JP):", "")
     example_sent    = pick("Example Sentence:", "")
     ipa             = pick("IPA:", "").strip("[]/ ")
@@ -203,8 +213,17 @@ def process_word(word: str) -> dict:
     if not gpt_tags:
         gpt_tags = heuristic_tags(word)
 
-    pos_mapping = {"Noun":"Noun","Verb":"V[I/T]","Adjective":"Adj.","Adverb":"Adv.","Preposition":"Prep.","Phrase":"Phr."}
-    pos = pos_mapping.get(pos_raw, "Phr." if is_phrase(word) else "Noun")
+    pos_map = {
+    "Noun": "Noun",
+    "Verb": "V[I/T]",
+    "Adjective": "Adj.",
+    "Adverb": "Adv.",
+    "Preposition": "Prep.",
+    "Phrase": "Phr.",
+    "Gerund Phrase": "Gerund Phr.",   # ★追加
+    }
+    # 不明時フォールバックも更新
+    pos = pos_map.get(pos_raw, "Gerund Phr." if is_gerund_phrase(word) else ("Phr." if is_phrase(word) else "Noun"))
 
     # Notion 送信
     props = {}
