@@ -249,7 +249,7 @@ def process_word(word: str) -> dict:
     "Verb Phrase": "Verb Phr."          # ★追加
     }
     # 不明時フォールバックも更新
-    pos = pos_mapping.get(
+    pos = pos_map.get(
     pos_raw,
     "Gerund Phr." if is_gerund_phrase(word) 
     else ("Phr." if is_phrase(word)
