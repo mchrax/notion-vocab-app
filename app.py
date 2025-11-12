@@ -81,19 +81,40 @@ def is_phrase(term: str) -> bool:
     return bool(re.search(r"[\s\-]", term.strip()))
 
 def is_gerund_phrase(term: str) -> bool:
-    """
-    動名詞句: 先頭語が -ing で、かつ2語以上（例: 'going abroad', 'being honest', 'having finished lunch'）
-    """
     t = term.strip()
     parts = re.findall(r"[A-Za-z']+", t)
     return len(parts) >= 2 and parts[0].lower().endswith("ing")
+
+def is_verb_phrase(term: str) -> bool:
+    """
+    超軽量ヒューリスティック:
+    - 2語以上
+    - 先頭語が -ing でない
+    - 先頭語が冠詞/前置詞/代名詞/接続詞でない
+    - 先頭語が英単語のみ（記号除く）
+    """
+    t = term.strip()
+    parts = re.findall(r"[A-Za-z']+", t)
+    if len(parts) < 2:
+        return False
+    first = parts[0].lower()
+    if first.endswith("ing"):
+        return False
+    stop = {
+        "a","an","the","to","of","in","on","at","for","from","with","by","as","about",
+        "and","or","but","nor","so","yet",
+        "i","you","he","she","it","we","they","me","him","her","us","them",
+        "this","that","these","those","my","your","his","her","its","our","their"
+    }
+    return first not in stop
 
 def build_prompt(word: str, strict_idiom: bool=False) -> str:
     base = f"""
 You are a lexicographer and register expert. Provide the following for '{word}'.
 
-1) Part of Speech (choose exactly one): Noun | Verb | Adjective | Adverb | Preposition | Phrase | Gerund Phrase
-- If it is a gerund phrase beginning with an -ing form (e.g., "being honest", "going abroad"), choose "Gerund Phrase".
+1) Part of Speech (choose exactly one): Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr.
+- If it begins with a base verb and has 2+ words (e.g., "pinch pennies", "make sense"), choose "Verb Phr.".
+- If it is a gerund phrase beginning with an -ing form (e.g., "being honest", "going abroad"), choose "Gerund Phr.".
 2) Definition in Japanese (accurate, concise)
 3) A simple example sentence in **English only**
 4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style. Example: ˌpɑːr.ləˈmen.tri
@@ -199,7 +220,11 @@ def process_word(word: str) -> dict:
                 return ln.replace(prefix,"").strip()
         return default
 
-    default_pos = "Gerund Phrase" if is_gerund_phrase(word) else ("Phrase" if is_phrase(word) else "Noun")
+    default_pos = (
+    "Gerund Phrase" if is_gerund_phrase(word)
+    else ("Verb Phrase" if is_verb_phrase(word)
+    else ("Phrase" if is_phrase(word) else "Noun"))
+    )
     pos_raw = pick("Part of Speech:", default_pos)
     definition_jp   = pick("Definition (JP):", "")
     example_sent    = pick("Example Sentence:", "")
@@ -221,9 +246,15 @@ def process_word(word: str) -> dict:
     "Preposition": "Prep.",
     "Phrase": "Phr.",
     "Gerund Phrase": "Gerund Phr.",   # ★追加
+    "Verb Phrase": "Verb Phr."          # ★追加
     }
     # 不明時フォールバックも更新
-    pos = pos_map.get(pos_raw, "Gerund Phr." if is_gerund_phrase(word) else ("Phr." if is_phrase(word) else "Noun"))
+    pos = pos_mapping.get(
+    pos_raw,
+    "Gerund Phr." if is_gerund_phrase(word) 
+    else ("Phr." if is_phrase(word)
+    else ("Verb Phr." if is_verb_phrase(word) else "Noun"))
+    )
 
     # Notion 送信
     props = {}
