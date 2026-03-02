@@ -301,11 +301,9 @@ def process_word(word: str) -> dict:
     pos_raw = pick("Parts of Speech:", "") or pick("Part of Speech:", default_pos)
     pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
     
-    # --- POS強制（フレーズ入力で単語側の品詞が混ざるのを防ぐ） ---
+    # --- POS強制（複数語は原則 Phrase、ing始まりだけ Gerund Phr.） ---
     if is_gerund_phrase(word):
         pos_items = ["Gerund Phr."]
-    elif is_verb_phrase(word):
-        pos_items = ["Verb Phr."]
     elif is_phrase(word):
         pos_items = ["Phrase"]
         
