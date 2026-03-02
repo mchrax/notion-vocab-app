@@ -116,12 +116,40 @@ You are a lexicographer and register expert. Provide the following for '{word}'.
 - If it begins with a base verb and has 2+ words (e.g., "pinch pennies", "make sense"), choose "Verb Phr.".
 - If it is a gerund phrase beginning with an -ing form (e.g., "being honest", "going abroad"), choose "Gerund Phr.".
 2) Definition in Japanese (accurate, concise)
-3) Example Sentence (TOEIC-style, English only)
-- Make it sound like TOEIC Part 5/7 business context (email, meeting, schedule, budget, policy, customer, shipment, invoice, HR, IT).
-- Use a natural collocation including the target word/phrase (1–2 typical collocates).
-- Keep it ONE sentence, 8–16 words.
-- Avoid slang, jokes, or overly casual wording.
-- Avoid rare proper nouns. Use neutral names like "the client", "the manager", "the report".
+3) TOEIC Collocation (Gold Phrase style, English only)
+
+Generate ONE extremely natural and high-frequency collocation 
+that would realistically appear in a TOEIC vocabulary book like
+"金のフレーズ".
+
+Rules:
+
+- Keep it very compact.
+- 2–4 words for nouns/adjectives/adverbs.
+- 2–5 words for verbs.
+- No full sentence unless absolutely necessary.
+- No grammar explanation.
+- No extra words.
+- No storytelling.
+- No artificial patterns.
+
+Focus on:
+
+- Realistic TOEIC business usage.
+- The most common object or complement for the word.
+- Natural frequency, not creativity.
+
+Examples of desired style (do NOT copy):
+
+reopen → reopen next Tuesday
+resolve → resolve customer complaints
+undergo → undergo training
+via → via e-mail
+machinery → construction machinery
+
+Output only the collocation.
+Single line.
+
 4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style. Example: ˌpɑːr.ləˈmen.tri
 5) Katakana (Japanese reading)
 6) Tags: choose ANY from this fixed set only:
