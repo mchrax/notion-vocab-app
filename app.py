@@ -132,6 +132,7 @@ Rules:
 - No extra words.
 - No storytelling.
 - No artificial patterns.
+- Ensure proper capitalization according to standard sentence rules.
 - Prefer placing short adverbial phrases at the end of the sentence.
 - Avoid front-position unless necessary.
 
