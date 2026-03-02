@@ -185,7 +185,7 @@ of late
 
 Return output exactly in the format below (no extra lines, no extra labels):
 
-Part of Speech: <one>
+Parts of Speech: <comma-separated>
 Definition (JP): <text>
 Example Sentence: <TOEIC Collocation (ONE line, English only)>
 IPA: <ipa>
@@ -307,15 +307,15 @@ def process_word(word: str) -> dict:
     "Gerund Phrase": "Gerund Phr.",   # ★追加
     "Verb Phrase": "Verb Phr."          # ★追加
     }
-　　　# 1) GPTのPOSを Notion 用ラベルへ変換（複数）
-　　　pos_multi = [pos_map.get(p, p) for p in pos_items]
+    # 1) GPTのPOSを Notion 用ラベルへ変換（複数）
+    pos_multi = [pos_map.get(p, p) for p in pos_items]
 
-　　　# 2) 何も取れなかった時の保険
-　　　if not pos_multi:
-   　　　 pos_multi = (
-        　["Gerund Phr."] if is_gerund_phrase(word)
-      　  else (["Verb Phr."] if is_verb_phrase(word)
-        　else (["Phr."] if is_phrase(word) else ["Noun"]))
+    # 2) 何も取れなかった時の保険
+    if not pos_multi:
+    pos_multi = (
+         ["Gerund Phr."] if is_gerund_phrase(word)
+         else (["Verb Phr."] if is_verb_phrase(word)
+         else (["Phr."] if is_phrase(word) else ["Noun"]))
     )
 
     # Notion 送信
@@ -348,17 +348,18 @@ def process_word(word: str) -> dict:
         )
         status = ("create", r.status_code, r.text[:1000])
 
-    return {
-        "word": word,
-        "pos": pos,
-        "definition_jp": definition_jp,
-        "example": example_sent,
-        "ipa": ipa,
-        "stress": pron_stress,
-        "katakana": katakana,
-        "tags": ", ".join(sorted(gpt_tags)) if gpt_tags else "",
-        "notion_result": status,
-    }
+return {
+    "word": word,
+    "pos": ", ".join(pos_multi),  # ← これでUI表示もOK
+    "pos_multi": pos_multi,       # ← ついでに配列も返しとくと便利
+    "definition_jp": definition_jp,
+    "example": example_sent,
+    "ipa": ipa,
+    "stress": pron_stress,
+    "katakana": katakana,
+    "tags": ", ".join(sorted(gpt_tags)) if gpt_tags else "",
+    "notion_result": status,
+}
 
 # ========== Streamlit UI ==========
 st.set_page_config(page_title="Notion Vocab App", page_icon="📘")
