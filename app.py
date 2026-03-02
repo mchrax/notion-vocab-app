@@ -315,20 +315,21 @@ def process_word(word: str) -> dict:
         "Gerund Phr.": "【Gerund Phr.】",
         "Verb Phrase": "【Verb Phr.】",
         "Gerund Phrase": "【Gerund Phr.】",
-     }
-     
-     def _has_pos_label(s: str) -> bool:
-         return bool(re.match(r"^【.+?】", (s or "").strip()))
+    }
 
-     # 複数POSなのにラベルが無い場合に補完
-     if len(pos_items) >= 2 and definition_jp and not _has_pos_label(definition_jp):
+    def _has_pos_label(s: str) -> bool:
+        return bool(re.match(r"^【.+?】", (s or "").strip()))
+
+    # 複数POSなのにラベルが無い場合に補完
+    if len(pos_items) >= 2 and definition_jp and not _has_pos_label(definition_jp):
         parts = [p.strip() for p in re.split(r"\s*(?:/|／)\s*", definition_jp) if p.strip()]
 
+        # pos_items が2〜3個で、定義も同数くらいに割れてる時だけ補完
         if 2 <= len(parts) <= len(pos_items) <= 3:
-           labeled = []
-           for p, part in zip(pos_items, parts):
-               labeled.append(f"{POS_JP_LABEL.get(p, '【?】')}{part}")
-           definition_jp = " / ".join(labeled)
+            labeled = []
+            for p, part in zip(pos_items, parts):
+                labeled.append(f"{POS_JP_LABEL.get(p, '【?】')}{part}")
+            definition_jp = " / ".join(labeled)
     
     coll1 = pick("Collocation 1:", "")
     coll2 = pick("Collocation 2:", "")
