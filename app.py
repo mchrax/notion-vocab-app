@@ -5,6 +5,7 @@ import requests
 from datetime import datetime, timezone
 
 import streamlit as st
+from openai import OpenAI
 
 # ========== 環境変数の読み込み（Cloudはst.secrets、ローカルは.env） ==========
 def get_env(name: str, default: str = "") -> str:
@@ -19,16 +20,16 @@ def get_env(name: str, default: str = "") -> str:
         pass
     return os.getenv(name, default)
 
-OPENAI_API_KEY      = get_env("OPENAI_API_KEY")
-NOTION_API_KEY      = get_env("NOTION_API_KEY")
-NOTION_DATABASE_ID  = get_env("NOTION_DATABASE_ID")
 
-# OpenAI（v1系）
-from openai import OpenAI
+OPENAI_API_KEY = get_env("OPENAI_API_KEY")
+NOTION_API_KEY = get_env("NOTION_API_KEY")
+NOTION_DATABASE_ID = get_env("NOTION_DATABASE_ID")
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ================== IPA → Stress 生成（あなたのロジックそのまま） ==================
+# ================== IPA → Stress 生成 ==================
 VOWEL_IPA = "aeiouɑɒɔæɪʊəɜ"
+
 
 def _ensure_dots(ipa_core: str) -> str:
     s = ipa_core
@@ -37,24 +38,32 @@ def _ensure_dots(ipa_core: str) -> str:
     s = re.sub(r"\.{2,}", ".", s)
     return s
 
+
 def _romanize_syllable(s: str) -> str:
     rep = s
-    C = [("tʃ","ch"),("dʒ","j"),("ʃ","sh"),("ʒ","zh"),("θ","th"),("ð","dh"),("ŋ","ng")]
-    for k,v in C: rep = rep.replace(k,v)
+    C = [("tʃ", "ch"), ("dʒ", "j"), ("ʃ", "sh"), ("ʒ", "zh"), ("θ", "th"), ("ð", "dh"), ("ŋ", "ng")]
+    for k, v in C:
+        rep = rep.replace(k, v)
+
     V = [
-        ("oʊ","oh"),("eɪ","ay"),("aɪ","eye"),("aʊ","ow"),("ɔɪ","oy"),
-        ("iː","ee"),("uː","oo"),
-        ("ɜː","er"),("ɑː","ah"),("ɔː","aw"),
-        ("ɪ","i"),("ʊ","u"),("ʌ","uh"),("ə","uh"),("æ","a"),
-        ("ɑ","ah"),("ɒ","o"),("ɔ","aw"),
+        ("oʊ", "oh"), ("eɪ", "ay"), ("aɪ", "eye"), ("aʊ", "ow"), ("ɔɪ", "oy"),
+        ("iː", "ee"), ("uː", "oo"),
+        ("ɜː", "er"), ("ɑː", "ah"), ("ɔː", "aw"),
+        ("ɪ", "i"), ("ʊ", "u"), ("ʌ", "uh"), ("ə", "uh"), ("æ", "a"),
+        ("ɑ", "ah"), ("ɒ", "o"), ("ɔ", "aw"),
     ]
-    for k,v in V: rep = rep.replace(k,v)
-    rep = rep.replace("ː","").replace("ɡ","g").replace("ɫ","l").replace("j","y")
+    for k, v in V:
+        rep = rep.replace(k, v)
+
+    rep = rep.replace("ː", "").replace("ɡ", "g").replace("ɫ", "l").replace("j", "y")
     return (rep.lower().strip() or s)
+
 
 def accent_from_ipa(ipa: str) -> str:
     core = ipa.strip().strip("/[] ")
-    if not core: return ""
+    if not core:
+        return ""
+
     tokens = [t for t in core.split() if t]
     outs = []
     for tok in tokens:
@@ -65,25 +74,33 @@ def accent_from_ipa(ipa: str) -> str:
             bare = syl.lstrip("ˈˌ")
             roman = _romanize_syllable(bare)
             parts.append(roman.upper() if primary else roman.lower())
-        res = "-".join(parts).replace("ˈ","").replace("ˌ","")
-        if len(parts) == 1: res = res.upper()
+
+        res = "-".join(parts).replace("ˈ", "").replace("ˌ", "")
+        if len(parts) == 1:
+            res = res.upper()
         outs.append(res)
+
     return " ".join(outs)
 
+
+# ================== タグ / 判定 ==================
 ALLOWED_TAGS = {
-    "社会問題","口語OK","書き言葉・報道","フォーマル",
-    "専門用語","法律用語","ビジネス","Football",
-    "医学","科学・技術","IT","スポーツ","文化・芸術",
-    "食べ物・料理","歴史","政治","自然・環境"
+    "社会問題", "口語OK", "書き言葉・報道", "フォーマル",
+    "専門用語", "法律用語", "ビジネス", "Football",
+    "医学", "科学・技術", "IT", "スポーツ", "文化・芸術",
+    "食べ物・料理", "歴史", "政治", "自然・環境"
 }
+
 
 def is_phrase(term: str) -> bool:
     return bool(re.search(r"[\s\-]", term.strip()))
+
 
 def is_gerund_phrase(term: str) -> bool:
     t = term.strip()
     parts = re.findall(r"[A-Za-z']+", t)
     return len(parts) >= 2 and parts[0].lower().endswith("ing")
+
 
 def is_verb_phrase(term: str) -> bool:
     """
@@ -91,24 +108,27 @@ def is_verb_phrase(term: str) -> bool:
     - 2語以上
     - 先頭語が -ing でない
     - 先頭語が冠詞/前置詞/代名詞/接続詞でない
-    - 先頭語が英単語のみ（記号除く）
     """
     t = term.strip()
     parts = re.findall(r"[A-Za-z']+", t)
     if len(parts) < 2:
         return False
+
     first = parts[0].lower()
     if first.endswith("ing"):
         return False
+
     stop = {
-        "a","an","the","to","of","in","on","at","for","from","with","by","as","about",
-        "and","or","but","nor","so","yet",
-        "i","you","he","she","it","we","they","me","him","her","us","them",
-        "this","that","these","those","my","your","his","her","its","our","their"
+        "a", "an", "the", "to", "of", "in", "on", "at", "for", "from", "with", "by", "as", "about",
+        "and", "or", "but", "nor", "so", "yet",
+        "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them",
+        "this", "that", "these", "those", "my", "your", "his", "her", "its", "our", "their"
     }
     return first not in stop
 
-def build_prompt(word: str, strict_idiom: bool=False) -> str:
+
+# ================== プロンプト ==================
+def build_prompt(word: str, strict_idiom: bool = False) -> str:
     base = f"""
 You are a TOEIC vocabulary book editor (「金のフレーズ」style).
 
@@ -122,52 +142,33 @@ Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr
 - If multiple POS, format like: 【N】... / 【V】... / 【Adj】...
 
 3) TOEIC Collocation (Gold Phrase style, English only)
-This is NOT a free-form example sentence task.
-Generate ONE extremely natural, high-frequency TOEIC-style collocation in business/workplace context.
+Generate ONE natural, high-frequency TOEIC-style collocation.
 
-Capitalization rule (very important):
-- Treat the output as a dictionary-style collocation, NOT a sentence.
-- Start with lowercase unless the first word is a proper noun or acronym.
-- Do NOT add a period.
-- For collocations (noun/verb/adjective/adverb usage), 
-  output in lowercase dictionary style.
-- Only use sentence capitalization if a full sentence is explicitly required.
+Critical rules:
+- For Noun/Verb/Adjective/Adverb/Preposition:
+  * Output a collocation chunk, NOT a full sentence.
+  * Use lowercase (unless proper noun/acronym).
+  * Do NOT add a period.
 
-Output format rules for the TOEIC Collocation (very important):
-- Output ONE line only.
-- Use proper capitalization (standard sentence rules).
-- Avoid unnecessary front-position structures.
+- For Phrase:
+  * If it is a clause-level adverbial phrase (e.g., "of late", "at times", "in part"),
+    output ONE short TOEIC-style sentence (5–10 words),
+    with normal sentence capitalization and a final period.
+  * If it is a standalone fixed chunk (e.g., "in advance", "on schedule"),
+    output the phrase itself (lowercase, no period).
 
-Length & shape rules (match the POS you chose in #1):
-A) Noun / Adjective / Adverb:
-- 2–4 words only
-- collocation only (NOT a full sentence)
+Length:
+A) Noun / Adjective / Adverb: 2–4 words
+B) Verb / Verb Phr. / Gerund Phr.: 2–6 words (include typical object/complement if needed)
+C) Preposition: 2–4 words
+D) Phrase sentence (only when needed): 5–10 words
 
-B) Verb / Verb Phr. / Gerund Phr.:
-- 2–5 words only
-- verb + the most common TOEIC object/complement (Gold Phrase style)
-- collocation only (NOT a full sentence)
+Style guidance:
+- Prefer business/workplace context.
+- Prefer impersonal/report style.
+- Avoid "I/we".
 
-C) Preposition:
-- 2–4 words only
-- the most common TOEIC usage chunk (e.g., "via email", "by credit card")
-
-D) Phrase:
-- If it is an adverbial phrase that typically modifies a full clause 
-  (e.g., "of late", "at times", "in part"),
-  generate ONE short natural TOEIC-style sentence (5–8 words).
-  Keep it compact.
-  Avoid long clauses.
-
-- If it is a standalone fixed chunk (e.g., "in advance", "on schedule"),
-  output the phrase itself.
-
-- Prefer impersonal or report-style structures 
-  (e.g., "There have been...", "Sales have increased...")
-      
-- Avoid first-person subjects ("I", "we").
-
-Business focus examples of desired style (do NOT copy):
+Examples of desired style (do NOT copy):
 reopen next Tuesday
 resolve customer complaints
 undergo training
@@ -187,7 +188,7 @@ Return output exactly in the format below (no extra lines, no extra labels):
 
 Parts of Speech: <comma-separated>
 Definition (JP): <text>
-Example Sentence: <TOEIC Collocation (ONE line, English only)>
+Example Sentence: <collocation OR short sentence>
 IPA: <ipa>
 Katakana: <カタカナ>
 Tags: <comma-separated or empty>
@@ -201,17 +202,20 @@ IMPORTANT:
 
     return base
 
+
 def heuristic_tags(word: str) -> set:
     w = word.lower()
     tags = set()
-    if any(k in w for k in ["summit","sanction","minister","administration","diplomacy"]):
+    if any(k in w for k in ["summit", "sanction", "minister", "administration", "diplomacy"]):
         tags.add("書き言葉・報道")
-    if any(k in w for k in ["goal","assist","midfielder","pressing"]):
+    if any(k in w for k in ["goal", "assist", "midfielder", "pressing"]):
         tags.add("Football")
     if not tags:
-        tags.add("口語OK")
+        tags.add("ビジネス")
     return tags
 
+
+# ================== Notion helpers ==================
 def db_has_property(prop_name: str) -> bool:
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}"
     headers = {
@@ -223,6 +227,7 @@ def db_has_property(prop_name: str) -> bool:
         return False
     return prop_name in r.json().get("properties", {})
 
+
 def find_existing_page_by_word(word: str):
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
@@ -230,12 +235,13 @@ def find_existing_page_by_word(word: str):
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28",
     }
-    payload = {"filter":{"property":"Word","title":{"equals":word}}, "page_size":1}
+    payload = {"filter": {"property": "Word", "title": {"equals": word}}, "page_size": 1}
     r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
     if r.status_code != 200:
         return None
     results = r.json().get("results", [])
     return results[0]["id"] if results else None
+
 
 def update_page_properties(page_id: str, properties: dict):
     url = f"https://api.notion.com/v1/pages/{page_id}"
@@ -247,49 +253,63 @@ def update_page_properties(page_id: str, properties: dict):
     payload = {"properties": properties}
     return requests.patch(url, headers=headers, data=json.dumps(payload), timeout=30)
 
+
 def safe_property_add(props, key, value, is_title=False, is_multi=False):
-    if not value:
+    if value is None:
+        return
+    if isinstance(value, str) and not value.strip():
         return
     if is_title:
-        props[key] = {"title":[{"text":{"content":value}}]}
+        props[key] = {"title": [{"text": {"content": value}}]}
     elif is_multi:
-        props[key] = {"multi_select":[{"name":v} for v in sorted(value)]}
+        # value: set/list
+        props[key] = {"multi_select": [{"name": v} for v in sorted(value)]}
     else:
-        props[key] = {"rich_text":[{"text":{"content":value}}]}
+        props[key] = {"rich_text": [{"text": {"content": value}}]}
 
-# ========== 1件処理の本体 ==========
+
+# ================== 1件処理本体 ==================
 def process_word(word: str) -> dict:
-    word = re.sub(r"\bbring\s+.+?\s+to the table\b", "bring something to the table", word.strip(), flags=re.I)
+    word = re.sub(
+        r"\bbring\s+.+?\s+to the table\b",
+        "bring something to the table",
+        word.strip(),
+        flags=re.I,
+    )
+
     prompt = build_prompt(word)
 
-    # OpenAI 呼び出し
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role":"user","content":prompt}],
-        max_tokens=280,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=320,
         temperature=0,
     )
-    output_text = resp.choices[0].message.content
+    output_text = resp.choices[0].message.content or ""
 
     lines = [ln.strip() for ln in output_text.split("\n") if ln.strip()]
+
     def pick(prefix, default=""):
         for ln in lines:
             if ln.startswith(prefix):
-                return ln.replace(prefix,"").strip()
+                return ln.replace(prefix, "").strip()
         return default
 
+    # POS: デフォルト
     default_pos = (
-    "Gerund Phrase" if is_gerund_phrase(word)
-    else ("Verb Phrase" if is_verb_phrase(word)
-    else ("Phrase" if is_phrase(word) else "Noun"))
+        "Gerund Phr." if is_gerund_phrase(word)
+        else ("Verb Phr." if is_verb_phrase(word)
+        else ("Phrase" if is_phrase(word) else "Noun"))
     )
+
     pos_raw = pick("Parts of Speech:", "") or pick("Part of Speech:", default_pos)
     pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
-    definition_jp   = pick("Definition (JP):", "")
-    example_sent    = pick("Example Sentence:", "")
-    ipa             = pick("IPA:", "").strip("[]/ ")
-    katakana        = pick("Katakana:", "")
-    tags_raw        = pick("Tags:", "")
+
+    definition_jp = pick("Definition (JP):", "")
+    example_sent = pick("Example Sentence:", "")
+    ipa = pick("IPA:", "").strip("[]/ ")
+    katakana = pick("Katakana:", "")
+    tags_raw = pick("Tags:", "")
 
     pron_stress = accent_from_ipa(ipa)
 
@@ -297,39 +317,49 @@ def process_word(word: str) -> dict:
     if not gpt_tags:
         gpt_tags = heuristic_tags(word)
 
+    # Notionに入れるPOSラベル（あなたのDBの値に合わせる）
     pos_map = {
-    "Noun": "Noun",
-    "Verb": "V[I/T]",
-    "Adjective": "Adj.",
-    "Adverb": "Adv.",
-    "Preposition": "Prep.",
-    "Phrase": "Phr.",
-    "Gerund Phrase": "Gerund Phr.",   # ★追加
-    "Verb Phrase": "Verb Phr."          # ★追加
+        "Noun": "Noun",
+        "Verb": "V[I/T]",
+        "Adjective": "Adj.",
+        "Adverb": "Adv.",
+        "Preposition": "Prep.",
+        "Phrase": "Phr.",
+
+        # どっち表記でも拾う（モデルが揺れてもOK）
+        "Verb Phr.": "Verb Phr.",
+        "Gerund Phr.": "Gerund Phr.",
+        "Verb Phrase": "Verb Phr.",
+        "Gerund Phrase": "Gerund Phr.",
     }
+
     # 1) GPTのPOSを Notion 用ラベルへ変換（複数）
     pos_multi = [pos_map.get(p, p) for p in pos_items]
 
     # 2) 何も取れなかった時の保険
     if not pos_multi:
-    pos_multi = (
-         ["Gerund Phr."] if is_gerund_phrase(word)
-         else (["Verb Phr."] if is_verb_phrase(word)
-         else (["Phr."] if is_phrase(word) else ["Noun"]))
-    )
+        pos_multi = (
+            ["Gerund Phr."] if is_gerund_phrase(word)
+            else (["Verb Phr."] if is_verb_phrase(word)
+            else (["Phr."] if is_phrase(word) else ["Noun"]))
+        )
 
     # Notion 送信
     props = {}
     safe_property_add(props, "Word", word, is_title=True)
-    props["A Part of Speech"] = {"multi_select":[{"name":p} for p in pos_multi]}
+
+    # POSは multi_select を直接セット
+    props["A Part of Speech"] = {"multi_select": [{"name": p} for p in pos_multi]}
+
     safe_property_add(props, "Definition (JP)", definition_jp)
     safe_property_add(props, "Example Sentence", example_sent)
     safe_property_add(props, "Stress", pron_stress)
     safe_property_add(props, "IPA", ipa)
     safe_property_add(props, "Katakana", katakana)
     safe_property_add(props, "Tags", gpt_tags, is_multi=True)
+
     if db_has_property("Last Updated"):
-        props["Last Updated"] = {"date":{"start": datetime.now(timezone.utc).isoformat()}}
+        props["Last Updated"] = {"date": {"start": datetime.now(timezone.utc).isoformat()}}
 
     page_id = find_existing_page_by_word(word)
     if page_id:
@@ -343,25 +373,26 @@ def process_word(word: str) -> dict:
                 "Content-Type": "application/json",
                 "Notion-Version": "2022-06-28",
             },
-            data=json.dumps({"parent":{"database_id":NOTION_DATABASE_ID}, "properties":props}),
+            data=json.dumps({"parent": {"database_id": NOTION_DATABASE_ID}, "properties": props}),
             timeout=30,
         )
         status = ("create", r.status_code, r.text[:1000])
 
-return {
-    "word": word,
-    "pos": ", ".join(pos_multi),  # ← これでUI表示もOK
-    "pos_multi": pos_multi,       # ← ついでに配列も返しとくと便利
-    "definition_jp": definition_jp,
-    "example": example_sent,
-    "ipa": ipa,
-    "stress": pron_stress,
-    "katakana": katakana,
-    "tags": ", ".join(sorted(gpt_tags)) if gpt_tags else "",
-    "notion_result": status,
-}
+    return {
+        "word": word,
+        "pos": ", ".join(pos_multi),
+        "pos_multi": pos_multi,
+        "definition_jp": definition_jp,
+        "example": example_sent,
+        "ipa": ipa,
+        "stress": pron_stress,
+        "katakana": katakana,
+        "tags": ", ".join(sorted(gpt_tags)) if gpt_tags else "",
+        "notion_result": status,
+    }
 
-# ========== Streamlit UI ==========
+
+# ================== Streamlit UI ==================
 st.set_page_config(page_title="Notion Vocab App", page_icon="📘")
 st.title("📘 Notion Vocab App")
 
@@ -373,32 +404,24 @@ with st.expander("🔑 接続状態", expanded=False):
     if not ok:
         st.warning("Secrets もしくは .env を設定してください。")
 
-# --- ここを追加：キーを先に初期化（辞書スタイル推奨） ---
+# 入力 state 初期化
 if "term_input" not in st.session_state:
     st.session_state["term_input"] = ""
 
-# --- クリア用コールバック（ここで state を更新） ---
+
 def _clear_term():
     st.session_state["term_input"] = ""
 
-# 入力欄（key を必ず付ける）
+
 term = st.text_input(
     "追加したい単語・フレーズを入力（例: bring something to the table）",
     key="term_input"
 )
 
-# ボタンは3列に
-col1, col2, col3 = st.columns([2, 2, 1])
-run  = col1.button("📌 Notion に登録 / 更新")
-# demo = col2.button("🧪 サンプルでテスト", help="network, latency でテストします")
-# 🫧 クリアは on_click で state を更新（rerun は不要）
-col3.button("🫧 クリア", help="入力を空にします", on_click=_clear_term)
+col1, col2 = st.columns([2, 1])
+run = col1.button("📌 Notion に登録 / 更新")
+col2.button("🫧 クリア", help="入力を空にします", on_click=_clear_term)
 
-# デモ押下時：state に直接セット（rerun 不要）
-# if demo and not st.session_state["term_input"]:
-#    st.session_state["term_input"] = "network latency"
-
-# 実行
 if run:
     term_val = st.session_state["term_input"].strip()
     if not term_val:
