@@ -9,10 +9,8 @@ from openai import OpenAI
 
 # ========== 環境変数の読み込み（Cloudはst.secrets、ローカルは.env） ==========
 def get_env(name: str, default: str = "") -> str:
-    # Streamlit Cloud では st.secrets を優先
     if hasattr(st, "secrets") and name in st.secrets:
         return st.secrets[name]
-    # ローカルは .env を許可
     try:
         from dotenv import load_dotenv
         load_dotenv()
@@ -103,12 +101,6 @@ def is_gerund_phrase(term: str) -> bool:
 
 
 def is_verb_phrase(term: str) -> bool:
-    """
-    超軽量ヒューリスティック:
-    - 2語以上
-    - 先頭語が -ing でない
-    - 先頭語が冠詞/前置詞/代名詞/接続詞でない
-    """
     t = term.strip()
     parts = re.findall(r"[A-Za-z']+", t)
     if len(parts) < 2:
@@ -140,29 +132,32 @@ Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr
 
 2) Definition in Japanese (accurate, concise)
 - If there is only ONE part of speech, do NOT add POS labels (e.g., do NOT use 【N】).
-  If there are multiple parts of speech, format like:【N】... / 【V】... / 【Adj】...
+  If there are multiple parts of speech, format like: 【N】... / 【V】... / 【Adj】...
 
 3) TOEIC Collocation (Gold Phrase style, English only)
-Generate ONE natural, high-frequency TOEIC-style collocation.
+
+You MUST output up to TWO lines:
+- Collocation 1: for the most important/common POS in TOEIC context
+- Collocation 2: for the second POS (if applicable); otherwise leave it empty.
 
 Critical rules:
-- For Noun/Verb/Adjective/Adverb/Preposition:
+- For Noun/Verb/Adjective/Adverb/Preposition/Verb Phr./Gerund Phr.:
   * Output a collocation chunk, NOT a full sentence.
   * Use lowercase (unless proper noun/acronym).
   * Do NOT add a period.
 
 - For Phrase:
-  * If it is a clause-level adverbial phrase (e.g., "of late", "at times", "in part"),
-    output ONE short TOEIC-style sentence (5–10 words),
+  * If it is a clause-level modifier (e.g., "of late", "at times", "in part",
+    or phrases like "as shown below", "as mentioned above"),
+    output ONE short business-style sentence (5–10 words),
     with normal sentence capitalization and a final period.
   * If it is a standalone fixed chunk (e.g., "in advance", "on schedule"),
     output the phrase itself (lowercase, no period).
-  * Also treat phrases containing past participles (e.g., "as shown below", "as mentioned above")
-    as clause-modifying phrases. In such cases, generate a short natural business-style sentence.
+  * For Phrase, Collocation 2 should usually be empty.
 
 Length:
 A) Noun / Adjective / Adverb: 2–4 words
-B) Verb / Verb Phr. / Gerund Phr.: 2–6 words (include typical object/complement if needed)
+B) Verb / Verb Phr. / Gerund Phr.: 2–6 words
 C) Preposition: 2–4 words
 D) Phrase sentence (only when needed): 5–10 words
 
@@ -170,14 +165,6 @@ Style guidance:
 - Prefer business/workplace context.
 - Prefer impersonal/report style.
 - Avoid "I/we".
-
-Examples of desired style (do NOT copy):
-reopen next Tuesday
-resolve customer complaints
-undergo training
-construction machinery
-via email
-of late
 
 4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style. Example: ˌpɑːr.ləˈmen.tri
 5) Katakana (Japanese reading)
@@ -191,7 +178,8 @@ Return output exactly in the format below (no extra lines, no extra labels):
 
 Parts of Speech: <comma-separated>
 Definition (JP): <text>
-Example Sentence: <collocation OR short sentence>
+Collocation 1: <text>
+Collocation 2: <text or empty>
 IPA: <ipa>
 Katakana: <カタカナ>
 Tags: <comma-separated or empty>
@@ -219,27 +207,39 @@ def heuristic_tags(word: str) -> set:
 
 
 # ================== Notion helpers ==================
-def db_has_property(prop_name: str) -> bool:
-    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}"
-    headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
-        "Notion-Version": "2022-06-28",
-    }
-    r = requests.get(url, headers=headers, timeout=20)
-    if r.status_code != 200:
-        return False
-    return prop_name in r.json().get("properties", {})
-
-
-def find_existing_page_by_word(word: str):
-    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
-    headers = {
+def notion_headers():
+    return {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28",
     }
+
+
+def get_db_schema():
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}"
+    r = requests.get(url, headers=notion_headers(), timeout=20)
+    if r.status_code != 200:
+        return {}
+    return r.json().get("properties", {}) or {}
+
+
+def db_has_property(prop_name: str) -> bool:
+    props = get_db_schema()
+    return prop_name in props
+
+
+def first_existing_property(candidates: list[str]) -> str | None:
+    props = get_db_schema()
+    for c in candidates:
+        if c in props:
+            return c
+    return None
+
+
+def find_existing_page_by_word(word: str):
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     payload = {"filter": {"property": "Word", "title": {"equals": word}}, "page_size": 1}
-    r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+    r = requests.post(url, headers=notion_headers(), data=json.dumps(payload), timeout=30)
     if r.status_code != 200:
         return None
     results = r.json().get("results", [])
@@ -248,13 +248,8 @@ def find_existing_page_by_word(word: str):
 
 def update_page_properties(page_id: str, properties: dict):
     url = f"https://api.notion.com/v1/pages/{page_id}"
-    headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
-        "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28",
-    }
     payload = {"properties": properties}
-    return requests.patch(url, headers=headers, data=json.dumps(payload), timeout=30)
+    return requests.patch(url, headers=notion_headers(), data=json.dumps(payload), timeout=30)
 
 
 def safe_property_add(props, key, value, is_title=False, is_multi=False):
@@ -265,7 +260,6 @@ def safe_property_add(props, key, value, is_title=False, is_multi=False):
     if is_title:
         props[key] = {"title": [{"text": {"content": value}}]}
     elif is_multi:
-        # value: set/list
         props[key] = {"multi_select": [{"name": v} for v in sorted(value)]}
     else:
         props[key] = {"rich_text": [{"text": {"content": value}}]}
@@ -285,7 +279,7 @@ def process_word(word: str) -> dict:
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=320,
+        max_tokens=360,
         temperature=0,
     )
     output_text = resp.choices[0].message.content or ""
@@ -298,21 +292,21 @@ def process_word(word: str) -> dict:
                 return ln.replace(prefix, "").strip()
         return default
 
-    # POS: デフォルト
     default_pos = (
         "Gerund Phr." if is_gerund_phrase(word)
         else ("Verb Phr." if is_verb_phrase(word)
-        else ("Phrase" if is_phrase(word) else "Noun"))
+              else ("Phrase" if is_phrase(word) else "Noun"))
     )
 
     pos_raw = pick("Parts of Speech:", "") or pick("Part of Speech:", default_pos)
     pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
 
     definition_jp = pick("Definition (JP):", "")
-    example_sent  = pick("Example Sentence:", "")
-    ipa           = pick("IPA:", "").strip("[]/ ")
-    katakana      = pick("Katakana:", "")
-    tags_raw      = pick("Tags:", "")
+    coll1 = pick("Collocation 1:", "")
+    coll2 = pick("Collocation 2:", "")
+    ipa = pick("IPA:", "").strip("[]/ ")
+    katakana = pick("Katakana:", "")
+    tags_raw = pick("Tags:", "")
 
     # 単一POSなら【N】などのラベルを削除
     if len(pos_items) == 1 and definition_jp:
@@ -324,7 +318,6 @@ def process_word(word: str) -> dict:
     if not gpt_tags:
         gpt_tags = heuristic_tags(word)
 
-    # Notionに入れるPOSラベル（あなたのDBの値に合わせる）
     pos_map = {
         "Noun": "Noun",
         "Verb": "V[I/T]",
@@ -332,34 +325,54 @@ def process_word(word: str) -> dict:
         "Adverb": "Adv.",
         "Preposition": "Prep.",
         "Phrase": "Phr.",
-
-        # どっち表記でも拾う（モデルが揺れてもOK）
         "Verb Phr.": "Verb Phr.",
         "Gerund Phr.": "Gerund Phr.",
         "Verb Phrase": "Verb Phr.",
         "Gerund Phrase": "Gerund Phr.",
     }
-
-    # 1) GPTのPOSを Notion 用ラベルへ変換（複数）
     pos_multi = [pos_map.get(p, p) for p in pos_items]
 
-    # 2) 何も取れなかった時の保険
     if not pos_multi:
         pos_multi = (
             ["Gerund Phr."] if is_gerund_phrase(word)
             else (["Verb Phr."] if is_verb_phrase(word)
-            else (["Phr."] if is_phrase(word) else ["Noun"]))
+                  else (["Phr."] if is_phrase(word) else ["Noun"]))
         )
 
-    # Notion 送信
+    # ===== Notion: Example Sentence 2 の実プロパティ名を探す =====
+    ex1_prop = "Example Sentence"
+    ex2_prop = first_existing_property([
+        "Example Sentence 2",
+        "Example Sentence Ⅱ",
+        "Example Sentence (2)",
+        "Example Sentence2",
+        "Example Sentence ②",
+        "Example Sentence (Second)",
+        "Example Sentence - 2",
+    ])
+    notes_prop = first_existing_property(["Notes", "Note", "Memo", "メモ", "ノート"])
+
     props = {}
     safe_property_add(props, "Word", word, is_title=True)
-
-    # POSは multi_select を直接セット
     props["A Part of Speech"] = {"multi_select": [{"name": p} for p in pos_multi]}
-
     safe_property_add(props, "Definition (JP)", definition_jp)
-    safe_property_add(props, "Example Sentence", example_sent)
+
+    # 1本目は必ず Example Sentence
+    safe_property_add(props, ex1_prop, coll1)
+
+    # 2本目：DBに2枠目があるならそっち、なければNotesに逃がす
+    if coll2:
+        if ex2_prop:
+            safe_property_add(props, ex2_prop, coll2)
+        elif notes_prop:
+            safe_property_add(props, notes_prop, f"Collocation 2: {coll2}")
+        else:
+            # 最終手段：Example Sentenceに追記（壊れにくさ優先）
+            if coll1:
+                safe_property_add(props, ex1_prop, f"{coll1} / {coll2}")
+            else:
+                safe_property_add(props, ex1_prop, coll2)
+
     safe_property_add(props, "Stress", pron_stress)
     safe_property_add(props, "IPA", ipa)
     safe_property_add(props, "Katakana", katakana)
@@ -375,11 +388,7 @@ def process_word(word: str) -> dict:
     else:
         r = requests.post(
             "https://api.notion.com/v1/pages",
-            headers={
-                "Authorization": f"Bearer {NOTION_API_KEY}",
-                "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
-            },
+            headers=notion_headers(),
             data=json.dumps({"parent": {"database_id": NOTION_DATABASE_ID}, "properties": props}),
             timeout=30,
         )
@@ -390,12 +399,15 @@ def process_word(word: str) -> dict:
         "pos": ", ".join(pos_multi),
         "pos_multi": pos_multi,
         "definition_jp": definition_jp,
-        "example": example_sent,
+        "collocation_1": coll1,
+        "collocation_2": coll2,
         "ipa": ipa,
         "stress": pron_stress,
         "katakana": katakana,
         "tags": ", ".join(sorted(gpt_tags)) if gpt_tags else "",
         "notion_result": status,
+        "ex2_property_used": ex2_prop or "",
+        "notes_property_used": notes_prop or "",
     }
 
 
@@ -411,7 +423,6 @@ with st.expander("🔑 接続状態", expanded=False):
     if not ok:
         st.warning("Secrets もしくは .env を設定してください。")
 
-# 入力 state 初期化
 if "term_input" not in st.session_state:
     st.session_state["term_input"] = ""
 
@@ -441,7 +452,15 @@ if run:
                 st.write("**Word**:", result["word"])
                 st.write("**POS**:", result["pos"])
                 st.write("**Definition (JP)**:", result["definition_jp"])
-                st.write("**Example**:", result["example"])
+                st.write("**Collocation 1**:", result["collocation_1"])
+                if result["collocation_2"]:
+                    st.write("**Collocation 2**:", result["collocation_2"])
+                    if result["ex2_property_used"]:
+                        st.caption(f"→ Notion: `{result['ex2_property_used']}` に保存")
+                    elif result["notes_property_used"]:
+                        st.caption(f"→ Notion: `{result['notes_property_used']}` に退避")
+                    else:
+                        st.caption("→ Notion: Example Sentence に追記（2枠目が見つからなかったため）")
                 st.write("**IPA**:", result["ipa"])
                 st.write("**Stress**:", result["stress"])
                 st.write("**Katakana**:", result["katakana"])
