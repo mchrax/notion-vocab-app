@@ -110,73 +110,78 @@ def is_verb_phrase(term: str) -> bool:
 
 def build_prompt(word: str, strict_idiom: bool=False) -> str:
     base = f"""
-You are a lexicographer and register expert. Provide the following for '{word}'.
+You are a TOEIC vocabulary book editor (「金のフレーズ」style).
 
-1) Part of Speech (choose exactly one): Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr.
-- If it begins with a base verb and has 2+ words (e.g., "pinch pennies", "make sense"), choose "Verb Phr.".
-- If it is a gerund phrase beginning with an -ing form (e.g., "being honest", "going abroad"), choose "Gerund Phr.".
+Provide the following for "{word}".
+
+1) Part of Speech (choose exactly one):
+Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr.
+
 2) Definition in Japanese (accurate, concise)
+
 3) TOEIC Collocation (Gold Phrase style, English only)
+This is NOT a free-form example sentence task.
+Generate ONE extremely natural, high-frequency TOEIC-style collocation in business/workplace context.
 
-Generate ONE extremely natural and high-frequency collocation 
-that would realistically appear in a TOEIC vocabulary book like
-"金のフレーズ".
+Output format rules for the TOEIC Collocation (very important):
+- Output ONE line only.
+- Use proper capitalization (standard sentence rules).
+- Avoid unnecessary front-position structures.
 
-Rules:
+Length & shape rules (match the POS you chose in #1):
+A) Noun / Adjective / Adverb:
+- 2–4 words only
+- collocation only (NOT a full sentence)
 
-- Keep it very compact.
-- 2–4 words for nouns/adjectives/adverbs.
-- 2–5 words for verbs.
-- No full sentence unless absolutely necessary.
-- No grammar explanation.
-- No extra words.
-- No storytelling.
-- No artificial patterns.
-- Ensure proper capitalization according to standard sentence rules.
-- Prefer placing short adverbial phrases at the end of the sentence.
-- Avoid front-position unless necessary.
+B) Verb / Verb Phr. / Gerund Phr.:
+- 2–5 words only
+- verb + the most common TOEIC object/complement (Gold Phrase style)
+- collocation only (NOT a full sentence)
 
-Focus on:
+C) Preposition:
+- 2–4 words only
+- the most common TOEIC usage chunk (e.g., "via email", "by credit card")
 
-- Realistic TOEIC business usage.
-- The most common object or complement for the word.
-- Natural frequency, not creativity.
+D) Phrase:
+- If it is a fixed expression that naturally stands alone (e.g., "in advance", "on schedule"),
+  output the phrase itself.
 
-Examples of desired style (do NOT copy):
+- If it is an adverbial phrase that normally modifies a clause (e.g., "of late", "at times"),
+  attach it to the most natural high-frequency TOEIC noun chunk (2–5 words total).
+  Do NOT create a full sentence.
 
-reopen → reopen next Tuesday
-resolve → resolve customer complaints
-undergo → undergo training
-via → via e-mail
-machinery → construction machinery
-
-Output only the collocation.
-Single line.
+Business focus examples of desired style (do NOT copy):
+reopen next Tuesday
+resolve customer complaints
+undergo training
+construction machinery
+via email
+of late
 
 4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style. Example: ˌpɑːr.ləˈmen.tri
 5) Katakana (Japanese reading)
-6) Tags: choose ANY from this fixed set only:
+6) Tags: choose ANY from this fixed set only (up to 2 tags):
    社会問題, 口語OK, 書き言葉・報道, フォーマル,
    専門用語, 法律用語, ビジネス, Football,
    医学, 科学・技術, IT, スポーツ,
    文化・芸術, 食べ物・料理, 歴史, 政治, 自然・環境
-   - Choose up to 2 tags: ideally 1 register tag and 1 domain tag.
 
-Return output exactly in the format below (no extra punctuation):
+Return output exactly in the format below (no extra lines, no extra labels):
 
 Part of Speech: <one>
 Definition (JP): <text>
-Example Sentence: <English only>
+Example Sentence: <TOEIC Collocation (ONE line, English only)>
 IPA: <ipa>
 Katakana: <カタカナ>
 Tags: <comma-separated or empty>
 """.strip()
+
     if is_phrase(word) or strict_idiom:
         base += """
 IMPORTANT:
-- This is likely a multi-word expression. Prefer idiomatic meanings over literal ones.
-- If a domain-specific idiom exists, output that and choose an appropriate domain tag.
+- This is likely a multi-word expression. Prefer the most common TOEIC/business usage.
 """.strip()
+
     return base
 
 def heuristic_tags(word: str) -> set:
