@@ -123,6 +123,14 @@ Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr
 This is NOT a free-form example sentence task.
 Generate ONE extremely natural, high-frequency TOEIC-style collocation in business/workplace context.
 
+Capitalization rule (very important):
+- Treat the output as a dictionary-style collocation, NOT a sentence.
+- Start with lowercase unless the first word is a proper noun or acronym.
+- Do NOT add a period.
+- For collocations (noun/verb/adjective/adverb usage), 
+  output in lowercase dictionary style.
+- Only use sentence capitalization if a full sentence is explicitly required.
+
 Output format rules for the TOEIC Collocation (very important):
 - Output ONE line only.
 - Use proper capitalization (standard sentence rules).
