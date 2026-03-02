@@ -114,10 +114,12 @@ You are a TOEIC vocabulary book editor (「金のフレーズ」style).
 
 Provide the following for "{word}".
 
-1) Part of Speech (choose exactly one):
+1) Parts of Speech (choose 1–3, comma-separated):
 Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr.
+- If the word is commonly used as both a noun and a verb in TOEIC context (e.g., "increase", "access"), include both.
 
 2) Definition in Japanese (accurate, concise)
+- If multiple POS, format like: 【N】... / 【V】... / 【Adj】...
 
 3) TOEIC Collocation (Gold Phrase style, English only)
 This is NOT a free-form example sentence task.
@@ -281,7 +283,8 @@ def process_word(word: str) -> dict:
     else ("Verb Phrase" if is_verb_phrase(word)
     else ("Phrase" if is_phrase(word) else "Noun"))
     )
-    pos_raw = pick("Part of Speech:", default_pos)
+    pos_raw = pick("Parts of Speech:", "") or pick("Part of Speech:", default_pos)
+    pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
     definition_jp   = pick("Definition (JP):", "")
     example_sent    = pick("Example Sentence:", "")
     ipa             = pick("IPA:", "").strip("[]/ ")
@@ -315,7 +318,7 @@ def process_word(word: str) -> dict:
     # Notion 送信
     props = {}
     safe_property_add(props, "Word", word, is_title=True)
-    props["A Part of Speech"] = {"multi_select":[{"name":pos}]}
+    props["A Part of Speech"] = {"multi_select":[{"name":p} for p in pos_multi]}
     safe_property_add(props, "Definition (JP)", definition_jp)
     safe_property_add(props, "Example Sentence", example_sent)
     safe_property_add(props, "Stress", pron_stress)
