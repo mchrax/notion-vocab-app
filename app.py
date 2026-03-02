@@ -156,6 +156,8 @@ Critical rules:
     with normal sentence capitalization and a final period.
   * If it is a standalone fixed chunk (e.g., "in advance", "on schedule"),
     output the phrase itself (lowercase, no period).
+  * Also treat phrases containing past participles (e.g., "as shown below", "as mentioned above")
+    as clause-modifying phrases. In such cases, generate a short natural business-style sentence.
 
 Length:
 A) Noun / Adjective / Adverb: 2–4 words
