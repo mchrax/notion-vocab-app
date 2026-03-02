@@ -152,6 +152,11 @@ D) Phrase:
 - If it is a standalone fixed chunk (e.g., "in advance", "on schedule"),
   output the phrase itself.
 
+- Prefer impersonal or report-style structures 
+  (e.g., "There have been...", "Sales have increased...")
+      
+- Avoid first-person subjects ("I", "we").
+
 Business focus examples of desired style (do NOT copy):
 reopen next Tuesday
 resolve customer complaints
