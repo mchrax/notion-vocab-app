@@ -116,7 +116,12 @@ You are a lexicographer and register expert. Provide the following for '{word}'.
 - If it begins with a base verb and has 2+ words (e.g., "pinch pennies", "make sense"), choose "Verb Phr.".
 - If it is a gerund phrase beginning with an -ing form (e.g., "being honest", "going abroad"), choose "Gerund Phr.".
 2) Definition in Japanese (accurate, concise)
-3) A simple example sentence in **English only**
+3) Example Sentence (TOEIC-style, English only)
+- Make it sound like TOEIC Part 5/7 business context (email, meeting, schedule, budget, policy, customer, shipment, invoice, HR, IT).
+- Use a natural collocation including the target word/phrase (1–2 typical collocates).
+- Keep it ONE sentence, 8–16 words.
+- Avoid slang, jokes, or overly casual wording.
+- Avoid rare proper nouns. Use neutral names like "the client", "the manager", "the report".
 4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style. Example: ˌpɑːr.ləˈmen.tri
 5) Katakana (Japanese reading)
 6) Tags: choose ANY from this fixed set only:
