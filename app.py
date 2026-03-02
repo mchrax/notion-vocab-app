@@ -125,7 +125,67 @@ def is_verb_phrase(term: str) -> bool:
     return first not in stop
 
 
-# ================== プロンプト ==================
+def heuristic_tags(word: str) -> set:
+    """LLMが空だった時だけの最小保険（デフォでビジネスは付けない）"""
+    w = word.lower()
+    tags = set()
+    if any(k in w for k in ["summit", "sanction", "minister", "administration", "diplomacy", "election", "cabinet"]):
+        tags |= {"書き言葉・報道", "政治"}
+    if any(k in w for k in ["goal", "assist", "midfielder", "pressing", "striker", "offside", "penalty"]):
+        tags.add("Football")
+    return tags & ALLOWED_TAGS
+
+
+def _parse_tags_line(s: str) -> set:
+    # 区切りゆれ: , / ， 、 ／ を許容
+    parts = [t.strip() for t in re.split(r"[,\u3001\uFF0C/／]+", (s or "")) if t.strip()]
+    return set(parts) & ALLOWED_TAGS
+
+
+def classify_tags_llm(word: str, pos_text: str, definition_jp: str, coll1: str, coll2: str) -> set:
+    """
+    タグだけは別プロンプトでニュートラルに分類する（ここが「ビジネスばっかり」問題の本丸対策）
+    - 一般語は Tags: (empty) を許容
+    - 複数領域でよく使う語は最大2つまで付ける（例: goal -> ビジネス,Football）
+    """
+    prompt = f"""
+You are classifying tags for a Japanese learner's Notion vocabulary database.
+
+Term: {word}
+POS: {pos_text}
+JP definition: {definition_jp}
+Collocation 1: {coll1}
+Collocation 2: {coll2}
+
+Choose up to TWO tags from this fixed list (or choose none):
+社会問題, 口語OK, 書き言葉・報道, フォーマル,
+専門用語, 法律用語, ビジネス, Football,
+医学, 科学・技術, IT, スポーツ,
+文化・芸術, 食べ物・料理, 歴史, 政治, 自然・環境
+
+Rules:
+- Do NOT default to ビジネス.
+- Use ビジネス only if it is mainly business/office usage OR the collocations clearly indicate business.
+- If the term is common/general and not tied to a domain, output empty.
+- If it is used in BOTH business and football contexts (e.g., "goal"), you may output: ビジネス, Football.
+- Output exactly one line in this format:
+Tags: <comma-separated or empty>
+""".strip()
+
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=80,
+        temperature=0,
+    )
+    text = (resp.choices[0].message.content or "").strip()
+    # 期待フォーマット: "Tags: ..."
+    m = re.search(r"^Tags:\s*(.*)$", text, flags=re.M)
+    tags_raw = m.group(1).strip() if m else ""
+    return _parse_tags_line(tags_raw)
+
+
+# ================== プロンプト（本体） ==================
 def build_prompt(word: str, strict_idiom: bool = False) -> str:
     # 入力がフレーズなら、POSの候補を絞ってLLMのブレを潰す
     forced_pos = None
@@ -165,27 +225,16 @@ Critical rules:
   * Use lowercase (unless proper noun/acronym).
   * Do NOT add a period.
 
-- For Phrase:
-  * If it is a clause-level modifier (e.g., "of late", "at times", "in part",
-    or phrases like "as shown below", "as mentioned above"),
-    output ONE short business-style sentence (5–10 words),
-    with normal sentence capitalization and a final period.
-  * If it is a standalone fixed chunk (e.g., "in advance", "on schedule"),
-    output the phrase itself (lowercase, no period).
-  * For Phrase, Collocation 2 should usually be empty.
+- For Phrase / Verb Phr. / Gerund Phr.:
+  * Output a fixed chunk (lowercase, no period). Do NOT output a noun-only meaning.
 
 Style guidance:
-- Prefer business/workplace context.
+- Prefer business/workplace context for collocations (NOT for tags).
 - Prefer impersonal/report style.
 - Avoid "I/we".
 
 4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style. Example: ˌpɑːr.ləˈmen.tri
 5) Katakana (Japanese reading)
-6) Tags: choose ANY from this fixed set only (up to 2 tags):
-   社会問題, 口語OK, 書き言葉・報道, フォーマル,
-   専門用語, 法律用語, ビジネス, Football,
-   医学, 科学・技術, IT, スポーツ,
-   文化・芸術, 食べ物・料理, 歴史, 政治, 自然・環境
 
 Return output exactly in the format below (no extra lines, no extra labels):
 
@@ -195,28 +244,14 @@ Collocation 1: <text>
 Collocation 2: <text or empty>
 IPA: <ipa>
 Katakana: <カタカナ>
-Tags: <comma-separated or empty>
 """.strip()
 
     if forced_pos:
         base += f"\n\nIMPORTANT:\n- The input is treated as {forced_pos}. Do NOT include other parts of speech.\n"
     elif is_phrase(word) or strict_idiom:
-        base += "\n\nIMPORTANT:\n- This is likely a multi-word expression. Prefer the most common TOEIC/business usage.\n"
+        base += "\n\nIMPORTANT:\n- This is likely a multi-word expression. Prefer the most common TOEIC usage.\n"
 
     return base
-
-
-def heuristic_tags(word: str) -> set:
-    w = word.lower()
-    tags = set()
-
-    if any(k in w for k in ["summit", "sanction", "minister", "administration", "diplomacy"]):
-        tags.add("書き言葉・報道")
-    if any(k in w for k in ["goal", "assist", "midfielder", "pressing"]):
-        tags.add("Football")
-
-    # デフォルトで「ビジネス」を付けない
-    return tags
 
 
 # ================== Notion helpers ==================
@@ -266,18 +301,29 @@ def update_page_properties(page_id: str, properties: dict):
 
 
 def safe_property_add(props, key, value, is_title=False, is_multi=False):
+    """
+    重要:
+    - multi_select は空配列 [] を送ることで「既存タグをクリア」できる。
+      ここをスキップすると、昔の「ビジネス」が残り続ける。
+    """
     if value is None:
         return
-    if is_multi and not value:
+
+    if is_title:
+        if isinstance(value, str) and not value.strip():
+            return
+        props[key] = {"title": [{"text": {"content": value}}]}
         return
+
+    if is_multi:
+        # 空でも送る（= クリアできる）
+        value_set = set(value) if isinstance(value, (set, list, tuple)) else set()
+        props[key] = {"multi_select": [{"name": v} for v in sorted(value_set)]}
+        return
+
     if isinstance(value, str) and not value.strip():
         return
-    if is_title:
-        props[key] = {"title": [{"text": {"content": value}}]}
-    elif is_multi:
-        props[key] = {"multi_select": [{"name": v} for v in sorted(value)]}
-    else:
-        props[key] = {"rich_text": [{"text": {"content": value}}]}
+    props[key] = {"rich_text": [{"text": {"content": value}}]}
 
 
 # ================== 1件処理本体 ==================
@@ -357,13 +403,12 @@ def process_word(word: str) -> dict:
     coll2 = pick("Collocation 2:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
     katakana = pick("Katakana:", "")
-    tags_raw = pick("Tags:", "") or pick("Tag:", "")
 
-    # ===== 重要ガード1: Collocation 2は複数POSのときだけ =====
+    # ===== ガード1: Collocation 2は複数POSのときだけ =====
     if len(pos_items) < 2:
         coll2 = ""
 
-    # ===== 重要ガード2: フレーズ系は「定義のスラッシュ分割」を1個に丸める =====
+    # ===== ガード2: フレーズ系は「定義のスラッシュ分割」を1個に丸める =====
     # 例: take measures -> 「対策を講じる / 対策」みたいに混ざったら左側だけ残す
     if len(pos_items) == 1 and pos_items[0] in ("Verb Phr.", "Gerund Phr.", "Phrase") and definition_jp:
         parts = [p.strip() for p in re.split(r"\s*(?:/|／)\s*", definition_jp) if p.strip()]
@@ -376,23 +421,19 @@ def process_word(word: str) -> dict:
 
     pron_stress = accent_from_ipa(ipa)
 
-    # ===== タグの決定（柔軟さ: GPT + heuristic を合成して最大2つ）=====
-    # 区切り文字ゆれ対策: , だけじゃなく「、」「，」「/」「／」も許容
-    raw_tags = [t.strip() for t in re.split(r"[,\u3001\uFF0C/／]+", tags_raw) if t.strip()]
+    # ===== タグ（LLM分類 + 最小保険）=====
+    pos_text_for_tag = ", ".join(pos_items) if pos_items else default_pos
+    tags = classify_tags_llm(
+        word=word,
+        pos_text=pos_text_for_tag,
+        definition_jp=definition_jp,
+        coll1=coll1,
+        coll2=coll2,
+    )
+    if not tags:
+        tags = heuristic_tags(word)
 
-    gpt_tags = set(raw_tags) & ALLOWED_TAGS
-    heur_tags = heuristic_tags(word) & ALLOWED_TAGS
-
-    # GPTタグがあっても、heuristicで補助タグを足す（最大2つ）
-    final_tags = set(gpt_tags)
-    for t in heur_tags:
-        if len(final_tags) >= 2:
-            break
-        final_tags.add(t)
-
-    # それでも空なら空のまま（= デフォでビジネス埋めはしない）
-    gpt_tags = final_tags
-
+    # ===== POS表記（Notion側）=====
     pos_map = {
         "Noun": "Noun",
         "Verb": "V[I/T]",
@@ -450,7 +491,9 @@ def process_word(word: str) -> dict:
     safe_property_add(props, "Stress", pron_stress)
     safe_property_add(props, "IPA", ipa)
     safe_property_add(props, "Katakana", katakana)
-    safe_property_add(props, "Tags", gpt_tags, is_multi=True)
+
+    # 重要: tags が空でも multi_select=[] を送って「過去タグを消す」
+    safe_property_add(props, "Tags", tags, is_multi=True)
 
     if db_has_property("Last Updated"):
         props["Last Updated"] = {"date": {"start": datetime.now(timezone.utc).isoformat()}}
@@ -478,7 +521,7 @@ def process_word(word: str) -> dict:
         "ipa": ipa,
         "stress": pron_stress,
         "katakana": katakana,
-        "tags": ", ".join(sorted(gpt_tags)) if gpt_tags else "",
+        "tags": ", ".join(sorted(tags)) if tags else "",
         "notion_result": status,
         "ex2_property_used": ex2_prop or "",
         "notes_property_used": notes_prop or "",
