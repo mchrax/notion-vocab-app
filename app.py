@@ -308,13 +308,15 @@ def process_word(word: str) -> dict:
     pos_raw = pick("Parts of Speech:", "") or pick("Part of Speech:", default_pos)
     pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
 
+    definition_jp = pick("Definition (JP):", "")
+    example_sent  = pick("Example Sentence:", "")
+    ipa           = pick("IPA:", "").strip("[]/ ")
+    katakana      = pick("Katakana:", "")
+    tags_raw      = pick("Tags:", "")
+
     # 単一POSなら【N】などのラベルを削除
-    if len(pos_items) == 1:
-    definition_jp = re.sub(r"^【.*?】\s*", "", definition_jp)
-    example_sent = pick("Example Sentence:", "")
-    ipa = pick("IPA:", "").strip("[]/ ")
-    katakana = pick("Katakana:", "")
-    tags_raw = pick("Tags:", "")
+    if len(pos_items) == 1 and definition_jp:
+        definition_jp = re.sub(r"^【.*?】\s*", "", definition_jp)
 
     pron_stress = accent_from_ipa(ipa)
 
