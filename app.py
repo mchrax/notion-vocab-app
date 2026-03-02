@@ -144,16 +144,21 @@ def _parse_tags_line(s: str) -> set:
 
 def classify_tags_llm(word: str, pos_text: str, definition_jp: str, coll1: str, coll2: str) -> set:
     """
-    タグだけは別プロンプトでニュートラルに分類する（ここが「ビジネスばっかり」問題の本丸対策）
-    - 一般語は Tags: (empty) を許容
-    - 複数領域でよく使う語は最大2つまで付ける（例: goal -> ビジネス,Football）
+    タグは「単語そのもの」ではなく、原則として collocation を根拠に分類する。
+    - ビジネスのデフォ付与は禁止
+    - 口語OK / 書き言葉・報道 / フォーマル のレジスター判定を優先（確信がある場合のみ）
+    - ドメインタグ（Football/IT/医学…）は collocation から強く示唆される時だけ
+    - 自信がなければ空（空でOK）
     """
     prompt = f"""
 You are classifying tags for a Japanese learner's Notion vocabulary database.
 
+IMPORTANT: Base your judgment primarily on the collocations below (not on the term itself).
+
 Term: {word}
 POS: {pos_text}
 JP definition: {definition_jp}
+
 Collocation 1: {coll1}
 Collocation 2: {coll2}
 
@@ -164,16 +169,17 @@ Choose up to TWO tags from this fixed list (or choose none):
 文化・芸術, 食べ物・料理, 歴史, 政治, 自然・環境
 
 Rules:
-Tag rules (IMPORTANT):
 - Do NOT default to ビジネス.
-- If you can confidently judge register, prioritize ONE of these:
-  * 口語OK (casual / conversational / informal)
+- If you can confidently judge register from the collocations, prioritize ONE of these:
+  * 口語OK (casual / conversational)
   * 書き言葉・報道 (news / report / written style)
-  * フォーマル (formal / official / polite)
-- Use domain tags only when strongly applicable (e.g., Football, IT, 医学, 法律用語, etc.).
-- ビジネス is allowed ONLY when the term is clearly business/office-centric (not just “can be used at work”).
+  * フォーマル (formal / official)
+- Use domain tags only when strongly indicated by the collocations (e.g., Football, IT, 医学, 法律用語).
+- ビジネス is allowed ONLY when the collocations are clearly office/business-centric.
 - If none apply or you are not confident, output empty.
 - Output at most 2 tags.
+
+Output exactly one line:
 Tags: <comma-separated or empty>
 """.strip()
 
@@ -184,10 +190,151 @@ Tags: <comma-separated or empty>
         temperature=0,
     )
     text = (resp.choices[0].message.content or "").strip()
-    # 期待フォーマット: "Tags: ..."
     m = re.search(r"^Tags:\s*(.*)$", text, flags=re.M)
     tags_raw = m.group(1).strip() if m else ""
     return _parse_tags_line(tags_raw)
+
+
+# ================== 定義JPラベルの堅牢化 ==================
+POS_JP_LABEL = {
+    "Noun": "【N】",
+    "Verb": "【V】",
+    "Adjective": "【Adj】",
+    "Adverb": "【Adv】",
+    "Preposition": "【Prep】",
+    "Phrase": "【Phr】",
+    "Verb Phr.": "【Verb Phr.】",
+    "Gerund Phr.": "【Gerund Phr.】",
+    "Verb Phrase": "【Verb Phr.】",
+    "Gerund Phrase": "【Gerund Phr.】",
+}
+
+
+def _has_pos_label(s: str) -> bool:
+    return bool(re.match(r"^【.+?】", (s or "").strip()))
+
+
+def canonical_pos_items(pos_items: list[str]) -> list[str]:
+    """
+    Definition整形・タグ判定用にPOSを正規化する。
+    例: V[I/T] や V を Verb 扱いにする。
+    """
+    out = []
+    for p in pos_items:
+        x = p.strip()
+        if x in {"V[I/T]", "V", "Verb"}:
+            out.append("Verb")
+        elif x in {"Adj.", "Adjective"}:
+            out.append("Adjective")
+        elif x in {"Adv.", "Adverb"}:
+            out.append("Adverb")
+        elif x in {"Prep.", "Preposition"}:
+            out.append("Preposition")
+        elif x in {"Noun"}:
+            out.append("Noun")
+        else:
+            out.append(x)
+
+    # 重複除去（順序維持）
+    seen = set()
+    uniq = []
+    for p in out:
+        if p not in seen:
+            uniq.append(p)
+            seen.add(p)
+    return uniq
+
+
+def fix_definition_labels_llm(word: str, pos_items: list[str], definition_jp: str) -> str:
+    """
+    複数POSのDefinitionを【N】... / 【V】... 形式に修復。
+    - 返答が崩れても拾う
+    - 失敗したら1回だけ再試行
+    - 最終保険として最低限のラベルを必ず付ける
+    """
+    pos_items = canonical_pos_items(pos_items)[:3]
+    pos_list = ", ".join(pos_items)
+
+    def _call() -> str:
+        prompt = f"""
+You are fixing a Japanese definition line for a TOEIC vocabulary entry.
+
+Term: {word}
+Parts of Speech: {pos_list}
+Current definition (JP): {definition_jp}
+
+Rules:
+- If there is only ONE part of speech, output Japanese definition WITHOUT any POS labels.
+- If there are MULTIPLE parts of speech, you MUST output in this format:
+  【N】... / 【V】... / 【Adj】... (use only labels that match the given POS list)
+- The number of labeled segments must match the number of POS items (up to 3).
+- Keep each segment concise.
+
+Output exactly ONE line:
+Definition (JP): <text>
+""".strip()
+
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=120,
+            temperature=0,
+        )
+        return (resp.choices[0].message.content or "").strip()
+
+    def _extract(text: str) -> str:
+        m = re.search(r"^Definition \(JP\):\s*(.*)$", text, flags=re.M)
+        if m:
+            return m.group(1).strip()
+
+        m2 = re.search(r"(【.+?】.*)$", text, flags=re.S)
+        if m2:
+            return m2.group(1).strip()
+
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        for ln in lines:
+            if "【" in ln and "】" in ln:
+                return ln.strip()
+        return ""
+
+    t1 = _call()
+    got = _extract(t1)
+
+    if not got:
+        t2 = _call()
+        got = _extract(t2)
+
+    if got:
+        return got
+
+    # 最終保険：必ずラベルを付けて返す
+    labels = [POS_JP_LABEL.get(p, "【?】") for p in pos_items]
+    if len(labels) >= 2:
+        return f"{labels[0]}{definition_jp} / {labels[1]}（要確認）"
+    return definition_jp
+
+
+def normalize_definition(word: str, pos_items: list[str], definition_jp: str) -> str:
+    definition_jp = (definition_jp or "").strip()
+
+    # 正規化POS（定義整形専用）
+    canon = canonical_pos_items(pos_items)
+
+    # フレーズ系は混入事故を丸める
+    if len(canon) == 1 and canon[0] in ("Verb Phr.", "Gerund Phr.", "Phrase") and definition_jp:
+        parts = [p.strip() for p in re.split(r"\s*(?:/|／)\s*", definition_jp) if p.strip()]
+        if parts:
+            definition_jp = parts[0]
+
+    # 複数POSなのにラベルが無い → 必ず修復
+    if len(canon) >= 2 and definition_jp and not _has_pos_label(definition_jp):
+        definition_jp = fix_definition_labels_llm(word, canon, definition_jp)
+
+    # 単一POSならラベルは削る（付いてきた場合）
+    if len(canon) == 1 and definition_jp:
+        definition_jp = re.sub(r"^【.*?】\s*", "", definition_jp).strip()
+
+    return definition_jp
 
 
 # ================== プロンプト（本体） ==================
@@ -309,7 +456,6 @@ def safe_property_add(props, key, value, is_title=False, is_multi=False):
     """
     重要:
     - multi_select は空配列 [] を送ることで「既存タグをクリア」できる。
-      ここをスキップすると、昔の「ビジネス」が残り続ける。
     """
     if value is None:
         return
@@ -321,7 +467,6 @@ def safe_property_add(props, key, value, is_title=False, is_multi=False):
         return
 
     if is_multi:
-        # 空でも送る（= クリアできる）
         value_set = set(value) if isinstance(value, (set, list, tuple)) else set()
         props[key] = {"multi_select": [{"name": v} for v in sorted(value_set)]}
         return
@@ -349,7 +494,6 @@ def process_word(word: str) -> dict:
         temperature=0,
     )
     output_text = resp.choices[0].message.content or ""
-
     lines = [ln.strip() for ln in output_text.split("\n") if ln.strip()]
 
     def pick(prefix, default=""):
@@ -377,33 +521,6 @@ def process_word(word: str) -> dict:
         pos_items = ["Phrase"]
 
     definition_jp = pick("Definition (JP):", "")
-
-    # ===== 定義JPラベルの後処理 =====
-    POS_JP_LABEL = {
-        "Noun": "【N】",
-        "Verb": "【V】",
-        "Adjective": "【Adj】",
-        "Adverb": "【Adv】",
-        "Preposition": "【Prep】",
-        "Phrase": "【Phr】",
-        "Verb Phr.": "【Verb Phr.】",
-        "Gerund Phr.": "【Gerund Phr.】",
-        "Verb Phrase": "【Verb Phr.】",
-        "Gerund Phrase": "【Gerund Phr.】",
-    }
-
-    def _has_pos_label(s: str) -> bool:
-        return bool(re.match(r"^【.+?】", (s or "").strip()))
-
-    # 複数POSなのにラベルが無い場合に補完（単語向け）
-    if len(pos_items) >= 2 and definition_jp and not _has_pos_label(definition_jp):
-        parts = [p.strip() for p in re.split(r"\s*(?:/|／)\s*", definition_jp) if p.strip()]
-        if 2 <= len(parts) <= len(pos_items) <= 3:
-            labeled = []
-            for p, part in zip(pos_items, parts):
-                labeled.append(f"{POS_JP_LABEL.get(p, '【?】')}{part}")
-            definition_jp = " / ".join(labeled)
-
     coll1 = pick("Collocation 1:", "")
     coll2 = pick("Collocation 2:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
@@ -413,20 +530,13 @@ def process_word(word: str) -> dict:
     if len(pos_items) < 2:
         coll2 = ""
 
-    # ===== ガード2: フレーズ系は「定義のスラッシュ分割」を1個に丸める =====
-    # 例: take measures -> 「対策を講じる / 対策」みたいに混ざったら左側だけ残す
-    if len(pos_items) == 1 and pos_items[0] in ("Verb Phr.", "Gerund Phr.", "Phrase") and definition_jp:
-        parts = [p.strip() for p in re.split(r"\s*(?:/|／)\s*", definition_jp) if p.strip()]
-        if len(parts) >= 1:
-            definition_jp = parts[0]
+    # ===== 定義JP：必ず「複数POSならラベル付き」を保証 =====
+    definition_jp = normalize_definition(word, pos_items, definition_jp)
 
-    # 単一POSなら【N】などのラベルを削除
-    if len(pos_items) == 1 and definition_jp:
-        definition_jp = re.sub(r"^【.*?】\s*", "", definition_jp)
-
+    # ===== 単語読み =====
     pron_stress = accent_from_ipa(ipa)
 
-    # ===== タグ（LLM分類 + 最小保険）=====
+    # ===== タグ（collocation根拠で判定）=====
     pos_text_for_tag = ", ".join(pos_items) if pos_items else default_pos
     tags = classify_tags_llm(
         word=word,
@@ -435,6 +545,10 @@ def process_word(word: str) -> dict:
         coll1=coll1,
         coll2=coll2,
     )
+
+    # LLMが空なら最小保険（ビジネスは入れない）
+    if not tags:
+        tags = heuristic_tags(word)
 
     # ===== POS表記（Notion側）=====
     pos_map = {
@@ -448,6 +562,11 @@ def process_word(word: str) -> dict:
         "Gerund Phr.": "Gerund Phr.",
         "Verb Phrase": "Verb Phr.",
         "Gerund Phrase": "Gerund Phr.",
+        # 返答ゆれ保険
+        "V[I/T]": "V[I/T]",
+        "Adj.": "Adj.",
+        "Adv.": "Adv.",
+        "Prep.": "Prep.",
     }
     pos_multi = [pos_map.get(p, p) for p in pos_items]
 
@@ -479,13 +598,14 @@ def process_word(word: str) -> dict:
     # 1本目は必ず Example Sentence
     safe_property_add(props, ex1_prop, coll1)
 
-    # 2本目：複数POSのときだけ入れる（上でcoll2落としてるのでここは安全）
+    # 2本目：複数POSのときだけ入れる
     if coll2:
         if ex2_prop:
             safe_property_add(props, ex2_prop, coll2)
         elif notes_prop:
             safe_property_add(props, notes_prop, f"Collocation 2: {coll2}")
         else:
+            # 最終手段：Example Sentence に連結
             if coll1:
                 safe_property_add(props, ex1_prop, f"{coll1} / {coll2}")
             else:
