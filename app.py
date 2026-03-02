@@ -209,12 +209,13 @@ Tags: <comma-separated or empty>
 def heuristic_tags(word: str) -> set:
     w = word.lower()
     tags = set()
+
     if any(k in w for k in ["summit", "sanction", "minister", "administration", "diplomacy"]):
         tags.add("書き言葉・報道")
     if any(k in w for k in ["goal", "assist", "midfielder", "pressing"]):
         tags.add("Football")
-    if not tags:
-        tags.add("ビジネス")
+
+    # デフォルトで「ビジネス」を付けない
     return tags
 
 
@@ -266,6 +267,8 @@ def update_page_properties(page_id: str, properties: dict):
 
 def safe_property_add(props, key, value, is_title=False, is_multi=False):
     if value is None:
+        return
+    if is_multi and not value:
         return
     if isinstance(value, str) and not value.strip():
         return
@@ -354,7 +357,7 @@ def process_word(word: str) -> dict:
     coll2 = pick("Collocation 2:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
     katakana = pick("Katakana:", "")
-    tags_raw = pick("Tags:", "")
+    tags_raw = pick("Tags:", "") or pick("Tag:", "")
 
     # ===== 重要ガード1: Collocation 2は複数POSのときだけ =====
     if len(pos_items) < 2:
