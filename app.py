@@ -143,12 +143,14 @@ C) Preposition:
 - the most common TOEIC usage chunk (e.g., "via email", "by credit card")
 
 D) Phrase:
-- If it is a fixed expression that naturally stands alone (e.g., "in advance", "on schedule"),
-  output the phrase itself.
+- If it is an adverbial phrase that typically modifies a full clause 
+  (e.g., "of late", "at times", "in part"),
+  generate ONE short natural TOEIC-style sentence (5–8 words).
+  Keep it compact.
+  Avoid long clauses.
 
-- If it is an adverbial phrase that normally modifies a clause (e.g., "of late", "at times"),
-  attach it to the most natural high-frequency TOEIC noun chunk (2–5 words total).
-  Do NOT create a full sentence.
+- If it is a standalone fixed chunk (e.g., "in advance", "on schedule"),
+  output the phrase itself.
 
 Business focus examples of desired style (do NOT copy):
 reopen next Tuesday
