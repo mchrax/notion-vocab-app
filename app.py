@@ -310,7 +310,7 @@ def process_word(word: str) -> dict:
 
     # 単一POSなら【N】などのラベルを削除
     if len(pos_items) == 1:
-     definition_jp = re.sub(r"^【.*?】\s*", "", definition_jp)
+    definition_jp = re.sub(r"^【.*?】\s*", "", definition_jp)
     example_sent = pick("Example Sentence:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
     katakana = pick("Katakana:", "")
