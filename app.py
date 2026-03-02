@@ -101,6 +101,12 @@ def is_gerund_phrase(term: str) -> bool:
 
 
 def is_verb_phrase(term: str) -> bool:
+    """
+    超軽量ヒューリスティック:
+    - 2語以上
+    - 先頭語が -ing でない
+    - 先頭語が冠詞/前置詞/代名詞/接続詞でない
+    """
     t = term.strip()
     parts = re.findall(r"[A-Za-z']+", t)
     if len(parts) < 2:
@@ -121,18 +127,31 @@ def is_verb_phrase(term: str) -> bool:
 
 # ================== プロンプト ==================
 def build_prompt(word: str, strict_idiom: bool = False) -> str:
+    # 入力がフレーズなら、POSの候補を絞ってLLMのブレを潰す
+    forced_pos = None
+    if is_gerund_phrase(word):
+        forced_pos = "Gerund Phr."
+    elif is_verb_phrase(word):
+        forced_pos = "Verb Phr."
+    elif is_phrase(word):
+        forced_pos = "Phrase"
+
+    pos_line = "Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr."
+    if forced_pos:
+        pos_line = forced_pos
+
     base = f"""
 You are a TOEIC vocabulary book editor (「金のフレーズ」style).
 
 Provide the following for "{word}".
 
-1) Parts of Speech (choose 1–3, comma-separated):
-Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr.
-- If the word is commonly used as both a noun and a verb in TOEIC context (e.g., "increase", "access"), include both.
+1) Parts of Speech:
+{pos_line}
+- Output only from the list above (comma-separated if multiple).
 
 2) Definition in Japanese (accurate, concise)
 - If there is only ONE part of speech, do NOT add POS labels (e.g., do NOT use 【N】).
-  If there are multiple parts of speech, format like: 【N】... / 【V】... / 【Adj】...
+- If there are multiple parts of speech, format like: 【N】... / 【V】... / 【Adj】...
 
 3) TOEIC Collocation (Gold Phrase style, English only)
 
@@ -154,12 +173,6 @@ Critical rules:
   * If it is a standalone fixed chunk (e.g., "in advance", "on schedule"),
     output the phrase itself (lowercase, no period).
   * For Phrase, Collocation 2 should usually be empty.
-
-Length:
-A) Noun / Adjective / Adverb: 2–4 words
-B) Verb / Verb Phr. / Gerund Phr.: 2–6 words
-C) Preposition: 2–4 words
-D) Phrase sentence (only when needed): 5–10 words
 
 Style guidance:
 - Prefer business/workplace context.
@@ -185,11 +198,10 @@ Katakana: <カタカナ>
 Tags: <comma-separated or empty>
 """.strip()
 
-    if is_phrase(word) or strict_idiom:
-        base += """
-IMPORTANT:
-- This is likely a multi-word expression. Prefer the most common TOEIC/business usage.
-""".strip()
+    if forced_pos:
+        base += f"\n\nIMPORTANT:\n- The input is treated as {forced_pos}. Do NOT include other parts of speech.\n"
+    elif is_phrase(word) or strict_idiom:
+        base += "\n\nIMPORTANT:\n- This is likely a multi-word expression. Prefer the most common TOEIC/business usage.\n"
 
     return base
 
@@ -228,7 +240,7 @@ def db_has_property(prop_name: str) -> bool:
     return prop_name in props
 
 
-def first_existing_property(candidates: list[str]) -> str | None:
+def first_existing_property(candidates: list[str]):
     props = get_db_schema()
     for c in candidates:
         if c in props:
@@ -292,6 +304,7 @@ def process_word(word: str) -> dict:
                 return ln.replace(prefix, "").strip()
         return default
 
+    # ===== POSの決定 =====
     default_pos = (
         "Gerund Phr." if is_gerund_phrase(word)
         else ("Verb Phr." if is_verb_phrase(word)
@@ -300,13 +313,15 @@ def process_word(word: str) -> dict:
 
     pos_raw = pick("Parts of Speech:", "") or pick("Part of Speech:", default_pos)
     pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
-    
-    # --- POS強制（複数語は原則 Phrase、ing始まりだけ Gerund Phr.） ---
+
+    # 入力がフレーズならPOSを強制（Verb Phr. を優先）
     if is_gerund_phrase(word):
         pos_items = ["Gerund Phr."]
+    elif is_verb_phrase(word):
+        pos_items = ["Verb Phr."]
     elif is_phrase(word):
         pos_items = ["Phrase"]
-        
+
     definition_jp = pick("Definition (JP):", "")
 
     # ===== 定義JPラベルの後処理 =====
@@ -326,22 +341,31 @@ def process_word(word: str) -> dict:
     def _has_pos_label(s: str) -> bool:
         return bool(re.match(r"^【.+?】", (s or "").strip()))
 
-    # 複数POSなのにラベルが無い場合に補完
+    # 複数POSなのにラベルが無い場合に補完（単語向け）
     if len(pos_items) >= 2 and definition_jp and not _has_pos_label(definition_jp):
         parts = [p.strip() for p in re.split(r"\s*(?:/|／)\s*", definition_jp) if p.strip()]
-
-        # pos_items が2〜3個で、定義も同数くらいに割れてる時だけ補完
         if 2 <= len(parts) <= len(pos_items) <= 3:
             labeled = []
             for p, part in zip(pos_items, parts):
                 labeled.append(f"{POS_JP_LABEL.get(p, '【?】')}{part}")
             definition_jp = " / ".join(labeled)
-    
+
     coll1 = pick("Collocation 1:", "")
     coll2 = pick("Collocation 2:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
     katakana = pick("Katakana:", "")
     tags_raw = pick("Tags:", "")
+
+    # ===== 重要ガード1: Collocation 2は複数POSのときだけ =====
+    if len(pos_items) < 2:
+        coll2 = ""
+
+    # ===== 重要ガード2: フレーズ系は「定義のスラッシュ分割」を1個に丸める =====
+    # 例: take measures -> 「対策を講じる / 対策」みたいに混ざったら左側だけ残す
+    if len(pos_items) == 1 and pos_items[0] in ("Verb Phr.", "Gerund Phr.", "Phrase") and definition_jp:
+        parts = [p.strip() for p in re.split(r"\s*(?:/|／)\s*", definition_jp) if p.strip()]
+        if len(parts) >= 1:
+            definition_jp = parts[0]
 
     # 単一POSなら【N】などのラベルを削除
     if len(pos_items) == 1 and definition_jp:
@@ -395,14 +419,13 @@ def process_word(word: str) -> dict:
     # 1本目は必ず Example Sentence
     safe_property_add(props, ex1_prop, coll1)
 
-    # 2本目：DBに2枠目があるならそっち、なければNotesに逃がす
+    # 2本目：複数POSのときだけ入れる（上でcoll2落としてるのでここは安全）
     if coll2:
         if ex2_prop:
             safe_property_add(props, ex2_prop, coll2)
         elif notes_prop:
             safe_property_add(props, notes_prop, f"Collocation 2: {coll2}")
         else:
-            # 最終手段：Example Sentenceに追記（壊れにくさ優先）
             if coll1:
                 safe_property_add(props, ex1_prop, f"{coll1} / {coll2}")
             else:
