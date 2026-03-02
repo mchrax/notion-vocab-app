@@ -139,7 +139,8 @@ Noun | Verb | Adjective | Adverb | Preposition | Phrase | Verb Phr. | Gerund Phr
 - If the word is commonly used as both a noun and a verb in TOEIC context (e.g., "increase", "access"), include both.
 
 2) Definition in Japanese (accurate, concise)
-- If multiple POS, format like: 【N】... / 【V】... / 【Adj】...
+- If there is only ONE part of speech, do NOT add POS labels (e.g., do NOT use 【N】).
+  If there are multiple parts of speech, format like:【N】... / 【V】... / 【Adj】...
 
 3) TOEIC Collocation (Gold Phrase style, English only)
 Generate ONE natural, high-frequency TOEIC-style collocation.
@@ -307,7 +308,9 @@ def process_word(word: str) -> dict:
     pos_raw = pick("Parts of Speech:", "") or pick("Part of Speech:", default_pos)
     pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
 
-    definition_jp = pick("Definition (JP):", "")
+    # 単一POSなら【N】などのラベルを削除
+    if len(pos_items) == 1:
+     definition_jp = re.sub(r"^【.*?】\s*", "", definition_jp)
     example_sent = pick("Example Sentence:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
     katakana = pick("Katakana:", "")
