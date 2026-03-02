@@ -316,7 +316,7 @@ def process_word(word: str) -> dict:
         "Verb Phrase": "【Verb Phr.】",
         "Gerund Phrase": "【Gerund Phr.】",
      }
-
+     
      def _has_pos_label(s: str) -> bool:
          return bool(re.match(r"^【.+?】", (s or "").strip()))
 
