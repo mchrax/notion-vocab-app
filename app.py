@@ -308,7 +308,7 @@ def process_word(word: str) -> dict:
         pos_items = ["Verb Phr."]
     elif is_phrase(word):
         pos_items = ["Phrase"]
-　　
+        
     definition_jp = pick("Definition (JP):", "")
 
     # ===== 定義JPラベルの後処理 =====
