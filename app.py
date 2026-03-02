@@ -164,11 +164,16 @@ Choose up to TWO tags from this fixed list (or choose none):
 文化・芸術, 食べ物・料理, 歴史, 政治, 自然・環境
 
 Rules:
+Tag rules (IMPORTANT):
 - Do NOT default to ビジネス.
-- Use ビジネス only if it is mainly business/office usage OR the collocations clearly indicate business.
-- If the term is common/general and not tied to a domain, output empty.
-- If it is used in BOTH business and football contexts (e.g., "goal"), you may output: ビジネス, Football.
-- Output exactly one line in this format:
+- If you can confidently judge register, prioritize ONE of these:
+  * 口語OK (casual / conversational / informal)
+  * 書き言葉・報道 (news / report / written style)
+  * フォーマル (formal / official / polite)
+- Use domain tags only when strongly applicable (e.g., Football, IT, 医学, 法律用語, etc.).
+- ビジネス is allowed ONLY when the term is clearly business/office-centric (not just “can be used at work”).
+- If none apply or you are not confident, output empty.
+- Output at most 2 tags.
 Tags: <comma-separated or empty>
 """.strip()
 
@@ -430,8 +435,6 @@ def process_word(word: str) -> dict:
         coll1=coll1,
         coll2=coll2,
     )
-    if not tags:
-        tags = heuristic_tags(word)
 
     # ===== POS表記（Notion側）=====
     pos_map = {
@@ -581,7 +584,7 @@ if run:
                 st.write("**IPA**:", result["ipa"])
                 st.write("**Stress**:", result["stress"])
                 st.write("**Katakana**:", result["katakana"])
-                st.write("**Tags**:", result["tags"])
+                st.write("**Tags**:", result["tags"] if result["tags"] else "(none)")
                 kind, code, body = result["notion_result"]
                 st.write(f"**Notion**: {kind} → status {code}")
                 if code not in (200, 201):
