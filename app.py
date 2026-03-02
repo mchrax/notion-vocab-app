@@ -376,9 +376,22 @@ def process_word(word: str) -> dict:
 
     pron_stress = accent_from_ipa(ipa)
 
-    gpt_tags = {t.strip() for t in tags_raw.split(",") if t.strip()} & ALLOWED_TAGS
-    if not gpt_tags:
-        gpt_tags = heuristic_tags(word)
+    # ===== タグの決定（柔軟さ: GPT + heuristic を合成して最大2つ）=====
+    # 区切り文字ゆれ対策: , だけじゃなく「、」「，」「/」「／」も許容
+    raw_tags = [t.strip() for t in re.split(r"[,\u3001\uFF0C/／]+", tags_raw) if t.strip()]
+
+    gpt_tags = set(raw_tags) & ALLOWED_TAGS
+    heur_tags = heuristic_tags(word) & ALLOWED_TAGS
+
+    # GPTタグがあっても、heuristicで補助タグを足す（最大2つ）
+    final_tags = set(gpt_tags)
+    for t in heur_tags:
+        if len(final_tags) >= 2:
+            break
+        final_tags.add(t)
+
+    # それでも空なら空のまま（= デフォでビジネス埋めはしない）
+    gpt_tags = final_tags
 
     pos_map = {
         "Noun": "Noun",
