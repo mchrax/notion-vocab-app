@@ -307,12 +307,15 @@ def process_word(word: str) -> dict:
     "Gerund Phrase": "Gerund Phr.",   # ★追加
     "Verb Phrase": "Verb Phr."          # ★追加
     }
-    # 不明時フォールバックも更新
-    pos = pos_map.get(
-    pos_raw,
-    "Gerund Phr." if is_gerund_phrase(word) 
-    else ("Phr." if is_phrase(word)
-    else ("Verb Phr." if is_verb_phrase(word) else "Noun"))
+　　　# 1) GPTのPOSを Notion 用ラベルへ変換（複数）
+　　　pos_multi = [pos_map.get(p, p) for p in pos_items]
+
+　　　# 2) 何も取れなかった時の保険
+　　　if not pos_multi:
+   　　　 pos_multi = (
+        　["Gerund Phr."] if is_gerund_phrase(word)
+      　  else (["Verb Phr."] if is_verb_phrase(word)
+        　else (["Phr."] if is_phrase(word) else ["Noun"]))
     )
 
     # Notion 送信
