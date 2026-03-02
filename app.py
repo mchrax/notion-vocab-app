@@ -302,6 +302,34 @@ def process_word(word: str) -> dict:
     pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
 
     definition_jp = pick("Definition (JP):", "")
+
+    # ===== 定義JPラベルの後処理 =====
+    POS_JP_LABEL = {
+        "Noun": "【N】",
+        "Verb": "【V】",
+        "Adjective": "【Adj】",
+        "Adverb": "【Adv】",
+        "Preposition": "【Prep】",
+        "Phrase": "【Phr】",
+        "Verb Phr.": "【Verb Phr.】",
+        "Gerund Phr.": "【Gerund Phr.】",
+        "Verb Phrase": "【Verb Phr.】",
+        "Gerund Phrase": "【Gerund Phr.】",
+     }
+
+     def _has_pos_label(s: str) -> bool:
+         return bool(re.match(r"^【.+?】", (s or "").strip()))
+
+     # 複数POSなのにラベルが無い場合に補完
+     if len(pos_items) >= 2 and definition_jp and not _has_pos_label(definition_jp):
+        parts = [p.strip() for p in re.split(r"\s*(?:/|／)\s*", definition_jp) if p.strip()]
+
+        if 2 <= len(parts) <= len(pos_items) <= 3:
+           labeled = []
+           for p, part in zip(pos_items, parts):
+               labeled.append(f"{POS_JP_LABEL.get(p, '【?】')}{part}")
+           definition_jp = " / ".join(labeled)
+    
     coll1 = pick("Collocation 1:", "")
     coll2 = pick("Collocation 2:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
