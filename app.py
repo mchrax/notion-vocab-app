@@ -211,7 +211,7 @@ POS_JP_LABEL = {
 
 
 def _has_pos_label(s: str) -> bool:
-    return bool(re.match(r"^【.+?】", (s or "").strip()))
+    return bool(re.match(r"^\s*(【.+?】|\[.+?\]|\(.+?\)|[A-Z]{1,5}\s*:)", (s or "").strip()))
 
 
 def canonical_pos_items(pos_items: list[str]) -> list[str]:
@@ -244,6 +244,25 @@ def canonical_pos_items(pos_items: list[str]) -> list[str]:
             seen.add(p)
     return uniq
 
+def normalize_definition_pos_labels(defn: str) -> str:
+    """
+    LLMが [V] / (V) / 【V】 などブレて返しても、
+    【V】形式に正規化する。
+    """
+    if not defn:
+        return defn
+
+    s = defn.strip()
+
+    # 先頭: [V] → 【V】 / (V) → 【V】
+    s = re.sub(r"^\[(N|V|Adj|Adv|Prep)\]\s*", r"【\1】", s)
+    s = re.sub(r"^\((N|V|Adj|Adv|Prep)\)\s*", r"【\1】", s)
+
+    # 区切り後: / [V] → / 【V】 など
+    s = re.sub(r"\s*(?:/|／)\s*\[(N|V|Adj|Adv|Prep)\]\s*", r" / 【\1】", s)
+    s = re.sub(r"\s*(?:/|／)\s*\((N|V|Adj|Adv|Prep)\)\s*", r" / 【\1】", s)
+
+    return s
 
 def fix_definition_labels_llm(word: str, pos_items: list[str], definition_jp: str) -> str:
     """
@@ -362,6 +381,16 @@ Provide the following for "{word}".
 - Output only from the list above (comma-separated if multiple).
 
 2) Definition in Japanese (accurate, concise)
+
+IMPORTANT:
+
+The definition must describe the dictionary meaning of the word itself,
+not the meaning of phrases containing the word.
+
+The definition must still be correct when the word appears alone.
+
+Do NOT derive meaning from collocations or example phrases.
+
 - If there is only ONE part of speech, do NOT add POS labels (e.g., do NOT use 【N】).
 - If there are multiple parts of speech, format like: 【N】... / 【V】... / 【Adj】...
 
@@ -521,6 +550,7 @@ def process_word(word: str) -> dict:
         pos_items = ["Phrase"]
 
     definition_jp = pick("Definition (JP):", "")
+    definition_jp = normalize_definition_pos_labels(definition_jp)
     coll1 = pick("Collocation 1:", "")
     coll2 = pick("Collocation 2:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
