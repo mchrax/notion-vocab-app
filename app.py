@@ -81,7 +81,15 @@ def accent_from_ipa(ipa: str) -> str:
     return " ".join(outs)
 
 
-# ================== 判定（フレーズなど） ==================
+# ================== タグ / 判定 ==================
+ALLOWED_TAGS = {
+    "社会問題", "口語OK", "書き言葉・報道", "フォーマル",
+    "専門用語", "法律用語", "ビジネス", "Football",
+    "医学", "科学・技術", "IT", "スポーツ", "文化・芸術",
+    "食べ物・料理", "歴史", "政治", "自然・環境"
+}
+
+
 def is_phrase(term: str) -> bool:
     return bool(re.search(r"[\s\-]", term.strip()))
 
@@ -117,65 +125,8 @@ def is_verb_phrase(term: str) -> bool:
     return first not in stop
 
 
-# ================== 辞書API（品詞の事実確定） ==================
-def get_pos_from_dictionaryapi(word: str) -> list[str]:
-    """
-    dictionaryapi.dev で英単語の品詞を取得（無料・キー不要）
-    目的:
-      - LLMの誤判定（vary を名詞扱い 等）を排除する
-    """
-    w = word.strip().lower()
-    if not w or is_phrase(w):
-        return []
-
-    url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{w}"
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200:
-            return []
-        data = r.json()
-        if not isinstance(data, list):
-            return []
-    except Exception:
-        return []
-
-    pos_set = set()
-    for entry in data:
-        meanings = entry.get("meanings", [])
-        for m in meanings:
-            pos = (m.get("partOfSpeech") or "").strip().lower()
-            if pos:
-                pos_set.add(pos)
-
-    mapping = {
-        "noun": "Noun",
-        "verb": "Verb",
-        "adjective": "Adjective",
-        "adverb": "Adverb",
-        "preposition": "Preposition",
-    }
-
-    # 順序は TOEIC 的に Verb → Noun → Adj → Adv → Prep を優先
-    ordered = ["verb", "noun", "adjective", "adverb", "preposition"]
-    mapped = []
-    for p in ordered:
-        if p in pos_set and p in mapping:
-            mapped.append(mapping[p])
-
-    return mapped[:3]
-
-
-# ================== タグ ==================
-ALLOWED_TAGS = {
-    "社会問題", "口語OK", "書き言葉・報道", "フォーマル",
-    "専門用語", "法律用語", "ビジネス", "Football",
-    "医学", "科学・技術", "IT", "スポーツ", "文化・芸術",
-    "食べ物・料理", "歴史", "政治", "自然・環境"
-}
-
-
 def heuristic_tags(word: str) -> set:
-    """LLMが空だった時だけの最小保険（ビジネスは絶対にデフォ付与しない）"""
+    """LLMが空だった時だけの最小保険（デフォでビジネスは付けない）"""
     w = word.lower()
     tags = set()
     if any(k in w for k in ["summit", "sanction", "minister", "administration", "diplomacy", "election", "cabinet"]):
@@ -192,11 +143,7 @@ def _parse_tags_line(s: str) -> set:
 
 def classify_tags_llm(word: str, pos_text: str, definition_jp: str, coll1: str, coll2: str) -> set:
     """
-    タグは原則として collocation を根拠に分類する。
-    - ビジネスのデフォ付与は禁止
-    - レジスター（口語OK/書き言葉・報道/フォーマル）を優先（確信がある場合のみ）
-    - ドメインタグは強く示唆される時だけ
-    - 自信がなければ空（空でOK）
+    タグは collocation を根拠に分類する（用例寄りで判定）
     """
     prompt = f"""
 You are classifying tags for a Japanese learner's Notion vocabulary database.
@@ -243,6 +190,95 @@ Tags: <comma-separated or empty>
     return _parse_tags_line(tags_raw)
 
 
+# ================== Wiktionary POS 検証（キー不要） ==================
+# LLMが「vary=Noun」みたいな事故を起こすので、外部辞書でフィルタする
+_WIKTIONARY_TAGS_TO_DROP = {"obsolete", "archaic", "dated", "historical"}
+
+_WIK_POS_MAP = {
+    "verb": "Verb",
+    "noun": "Noun",
+    "adjective": "Adjective",
+    "adverb": "Adverb",
+    "preposition": "Preposition",
+}
+
+def wiktionary_valid_pos(word: str) -> set[str]:
+    """
+    Wiktionary REST APIで英単語のPOSを取得し、
+    そのPOSが「現代英語として有効か」を判定して返す。
+
+    - POSごとに definitions を見て、タグが obsolete/archaic/dated/historical だけなら不採用
+    - 取得に失敗したら空set（= フィルタしない）
+    """
+    w = word.strip().lower()
+    if not w or is_phrase(w):
+        return set()
+
+    url = f"https://en.wiktionary.org/api/rest_v1/page/definition/{w}"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return set()
+        data = r.json()
+    except Exception:
+        return set()
+
+    en = data.get("en")
+    if not isinstance(en, list):
+        return set()
+
+    valid = set()
+    for entry in en:
+        pos_raw = (entry.get("partOfSpeech") or "").strip().lower()
+        if pos_raw not in _WIK_POS_MAP:
+            continue
+
+        defs = entry.get("definitions") or []
+        if not isinstance(defs, list) or not defs:
+            continue
+
+        # 「obsolete等しかない」なら落とす
+        keep_this_pos = False
+        for d in defs:
+            tags = set((d.get("tags") or []))
+            # tagsが空なら現代語として使われる可能性が高い → keep
+            if not tags:
+                keep_this_pos = True
+                break
+            # obsolete等が混ざっていない定義が1つでもあれば keep
+            if not (tags & _WIKTIONARY_TAGS_TO_DROP) and ("obsolete" not in tags):
+                keep_this_pos = True
+                break
+
+        if keep_this_pos:
+            valid.add(_WIK_POS_MAP[pos_raw])
+
+    return valid
+
+
+def filter_pos_items_with_wiktionary(word: str, pos_items: list[str]) -> list[str]:
+    """
+    LLMが返したPOSを、Wiktionaryの有効POSでフィルタする。
+    - フレーズ類はフィルタしない
+    - Wiktionaryが取れない場合もフィルタしない
+    """
+    if not pos_items or is_phrase(word):
+        return pos_items
+
+    valid = wiktionary_valid_pos(word)
+    if not valid:
+        return pos_items  # 取れなかったら現状維持
+
+    # LLM側の表記ゆれも吸収してからフィルタ
+    canon = canonical_pos_items(pos_items)
+    kept = [p for p in canon if p in valid]
+
+    # 全部落ちたら、最低限は元の先頭を残す（完全空は避ける）
+    if not kept:
+        return [canon[0]] if canon else pos_items
+    return kept
+
+
 # ================== 定義JPラベルの堅牢化 ==================
 POS_JP_LABEL = {
     "Noun": "【N】",
@@ -257,11 +293,18 @@ POS_JP_LABEL = {
     "Gerund Phrase": "【Gerund Phr.】",
 }
 
+def _has_pos_label(s: str) -> bool:
+    return bool(re.match(r"^\s*【.+?】", (s or "").strip()))
+
 
 def canonical_pos_items(pos_items: list[str]) -> list[str]:
+    """
+    Definition整形・タグ判定用にPOSを正規化する。
+    例: V[I/T] や V を Verb 扱いにする。
+    """
     out = []
     for p in pos_items:
-        x = (p or "").strip()
+        x = p.strip()
         if x in {"V[I/T]", "V", "Verb"}:
             out.append("Verb")
         elif x in {"Adj.", "Adjective"}:
@@ -275,48 +318,46 @@ def canonical_pos_items(pos_items: list[str]) -> list[str]:
         else:
             out.append(x)
 
+    # 重複除去（順序維持）
     seen = set()
     uniq = []
     for p in out:
-        if p and p not in seen:
+        if p not in seen:
             uniq.append(p)
             seen.add(p)
     return uniq
 
 
-def _has_pos_label(s: str) -> bool:
-    return bool(re.match(r"^\s*(【.+?】|\[.+?\]|\(.+?\))", (s or "").strip()))
-
-
 def normalize_definition_pos_labels(defn: str) -> str:
     """
-    LLMが [V] / (V) / 【V】 などブレても、【V】形式に正規化する。
-    - 先頭と、スラッシュ区切り直後のラベルを正規化
+    LLMが [V] / (V) / 【V】 などブレて返しても、
+    【V】形式に正規化する。
     """
     if not defn:
         return defn
 
     s = defn.strip()
 
-    # 先頭ラベル
+    # 先頭: [V] → 【V】 / (V) → 【V】
     s = re.sub(r"^\[(N|V|Adj|Adv|Prep)\]\s*", r"【\1】", s)
     s = re.sub(r"^\((N|V|Adj|Adv|Prep)\)\s*", r"【\1】", s)
 
-    # 区切り後ラベル
+    # 区切り後: / [V] → / 【V】 など
     s = re.sub(r"\s*(?:/|／)\s*\[(N|V|Adj|Adv|Prep)\]\s*", r" / 【\1】", s)
     s = re.sub(r"\s*(?:/|／)\s*\((N|V|Adj|Adv|Prep)\)\s*", r" / 【\1】", s)
 
-    # 小文字ラベル保険
-    s = re.sub(r"【\s*(n|v|adj|adv|prep)\s*】", lambda m: f"【{m.group(1).upper()}】", s)
+    # 【V】の前に余計なスペースがあるケースも詰める
+    s = re.sub(r"\s*【", "【", s)
     return s
 
 
 def fix_definition_labels_llm(word: str, pos_items: list[str], definition_jp: str) -> str:
     """
     複数POSのDefinitionを【N】... / 【V】... 形式に修復。
+    - 最終保険として最低限のラベルを必ず付ける
     """
-    canon = canonical_pos_items(pos_items)[:3]
-    pos_list = ", ".join(canon)
+    pos_items = canonical_pos_items(pos_items)[:3]
+    pos_list = ", ".join(pos_items)
 
     def _call() -> str:
         prompt = f"""
@@ -332,11 +373,12 @@ Rules:
   【N】... / 【V】... / 【Adj】... (use only labels that match the given POS list)
 - The number of labeled segments must match the number of POS items (up to 3).
 - Keep each segment concise.
-- Do not invent meanings from collocations.
+- The definition must be the dictionary meaning of the word itself (not derived from collocations).
 
 Output exactly ONE line:
 Definition (JP): <text>
 """.strip()
+
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -349,23 +391,20 @@ Definition (JP): <text>
         m = re.search(r"^Definition \(JP\):\s*(.*)$", text, flags=re.M)
         if m:
             return m.group(1).strip()
-
-        # 変な返し方でも拾う
+        # fallback
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         for ln in lines:
             if "【" in ln and "】" in ln:
-                return ln
+                return ln.strip()
         return ""
 
-    got = _extract(_call())
-    if not got:
-        got = _extract(_call())
+    got = _extract(_call()) or _extract(_call())
 
     if got:
         return got
 
-    # 最終保険（最低限のラベルは付ける）
-    labels = [POS_JP_LABEL.get(p, "【?】") for p in canon]
+    # 最終保険
+    labels = [POS_JP_LABEL.get(p, "【?】") for p in pos_items]
     if len(labels) >= 2:
         return f"{labels[0]}{definition_jp} / {labels[1]}（要確認）"
     return definition_jp
@@ -381,16 +420,11 @@ def normalize_definition(word: str, pos_items: list[str], definition_jp: str) ->
         if parts:
             definition_jp = parts[0]
 
-    # 複数POSならラベル必須（ラベルが無い/崩れてるなら修復）
-    definition_jp = normalize_definition_pos_labels(definition_jp)
-    if len(canon) >= 2:
-        if not _has_pos_label(definition_jp):
-            definition_jp = fix_definition_labels_llm(word, canon, definition_jp)
-        else:
-            # ラベルがあるが、【N】等の形式に揃ってない可能性があるので再正規化
-            definition_jp = normalize_definition_pos_labels(definition_jp)
+    # 複数POS：ラベル無しなら必ず修復
+    if len(canon) >= 2 and definition_jp and not _has_pos_label(definition_jp):
+        definition_jp = fix_definition_labels_llm(word, canon, definition_jp)
 
-    # 単一POSならラベルを消す（付いてきた場合）
+    # 単一POS：ラベルが付いていたら削る
     if len(canon) == 1 and definition_jp:
         definition_jp = re.sub(r"^【.*?】\s*", "", definition_jp).strip()
 
@@ -419,7 +453,6 @@ Provide the following for "{word}".
 1) Parts of Speech:
 {pos_line}
 - Output only from the list above (comma-separated if multiple).
-- Do NOT include obsolete/archaic parts of speech or senses.
 
 2) Definition in Japanese (accurate, concise)
 
@@ -428,6 +461,7 @@ IMPORTANT:
   not the meaning of phrases containing the word.
 - The definition must still be correct when the word appears alone.
 - Do NOT derive meaning from collocations or example phrases.
+- Avoid obsolete/archaic senses.
 
 - If there is only ONE part of speech, do NOT add POS labels (e.g., do NOT use 【N】).
 - If there are multiple parts of speech, format like: 【N】... / 【V】... / 【Adj】...
@@ -452,7 +486,7 @@ Style guidance:
 - Prefer impersonal/report style.
 - Avoid "I/we".
 
-4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style. Example: ˌpɑːr.ləˈmen.tri
+4) IPA with syllable dots and stress marks (ˈ primary, ˌ secondary), Cambridge style.
 5) Katakana (Japanese reading)
 
 Return output exactly in the format below (no extra lines, no extra labels):
@@ -521,8 +555,7 @@ def update_page_properties(page_id: str, properties: dict):
 
 def safe_property_add(props, key, value, is_title=False, is_multi=False):
     """
-    重要:
-    - multi_select は空配列 [] を送ることで「既存タグをクリア」できる。
+    - multi_select は空配列 [] を送ることで「既存タグをクリア」できる
     """
     if value is None:
         return
@@ -569,7 +602,7 @@ def process_word(word: str) -> dict:
                 return ln.replace(prefix, "").strip()
         return default
 
-    # ===== POSの決定（まずはLLM出力を読む）=====
+    # ===== POSの決定 =====
     default_pos = (
         "Gerund Phr." if is_gerund_phrase(word)
         else ("Verb Phr." if is_verb_phrase(word)
@@ -579,34 +612,34 @@ def process_word(word: str) -> dict:
     pos_raw = pick("Parts of Speech:", "") or pick("Part of Speech:", default_pos)
     pos_items = [p.strip() for p in pos_raw.split(",") if p.strip()]
 
-    # ===== POSの事実確定（単語は辞書API優先）=====
-    # vary の名詞混入など、LLMの誤判定をここで排除する
-    dict_pos = get_pos_from_dictionaryapi(word)
-    if dict_pos:
-        pos_items = dict_pos
-
-    # ===== 入力がフレーズならPOSを強制（辞書よりこちらを優先）=====
+    # 入力がフレーズならPOSを強制
     if is_gerund_phrase(word):
         pos_items = ["Gerund Phr."]
     elif is_verb_phrase(word):
         pos_items = ["Verb Phr."]
     elif is_phrase(word):
         pos_items = ["Phrase"]
+    else:
+        # 単語はWiktionaryでPOS検証して事故を落とす（vary=Noun みたいなのを潰す）
+        pos_items = filter_pos_items_with_wiktionary(word, pos_items)
 
     definition_jp = pick("Definition (JP):", "")
+    # ★ここが「[V] を 【V】に正規化」の入れどころ
+    definition_jp = normalize_definition_pos_labels(definition_jp)
+
     coll1 = pick("Collocation 1:", "")
     coll2 = pick("Collocation 2:", "")
     ipa = pick("IPA:", "").strip("[]/ ")
     katakana = pick("Katakana:", "")
 
-    # ===== Collocation 2は「複数POS」のときだけ =====
+    # ===== Collocation 2は複数POSのときだけ =====
     if len(pos_items) < 2:
         coll2 = ""
 
-    # ===== 定義JP：複数POSなら必ず【N】/【V】…を保証（単語の意味優先）=====
+    # ===== Definition：複数POSならラベル必須 / 単一POSならラベル削除 =====
     definition_jp = normalize_definition(word, pos_items, definition_jp)
 
-    # ===== 発音 =====
+    # ===== 単語読み =====
     pron_stress = accent_from_ipa(ipa)
 
     # ===== タグ（collocation根拠で判定）=====
@@ -618,6 +651,7 @@ def process_word(word: str) -> dict:
         coll1=coll1,
         coll2=coll2,
     )
+
     if not tags:
         tags = heuristic_tags(word)
 
@@ -634,14 +668,7 @@ def process_word(word: str) -> dict:
         "Verb Phrase": "Verb Phr.",
         "Gerund Phrase": "Gerund Phr.",
     }
-    pos_multi = [pos_map.get(p, p) for p in pos_items]
-
-    if not pos_multi:
-        pos_multi = (
-            ["Gerund Phr."] if is_gerund_phrase(word)
-            else (["Verb Phr."] if is_verb_phrase(word)
-                  else (["Phr."] if is_phrase(word) else ["Noun"]))
-        )
+    pos_multi = [pos_map.get(p, p) for p in pos_items] if pos_items else [pos_map.get(default_pos, default_pos)]
 
     # ===== Notion: Example Sentence 2 の実プロパティ名を探す =====
     ex1_prop = "Example Sentence"
@@ -661,8 +688,10 @@ def process_word(word: str) -> dict:
     props["A Part of Speech"] = {"multi_select": [{"name": p} for p in pos_multi]}
     safe_property_add(props, "Definition (JP)", definition_jp)
 
+    # 1本目は必ず Example Sentence
     safe_property_add(props, ex1_prop, coll1)
 
+    # 2本目：複数POSのときだけ入れる
     if coll2:
         if ex2_prop:
             safe_property_add(props, ex2_prop, coll2)
@@ -678,7 +707,7 @@ def process_word(word: str) -> dict:
     safe_property_add(props, "IPA", ipa)
     safe_property_add(props, "Katakana", katakana)
 
-    # 重要: tags が空でも multi_select=[] を送って「過去タグを消す」
+    # tagsが空でも multi_select=[] を送って「過去タグを消す」
     safe_property_add(props, "Tags", tags, is_multi=True)
 
     if db_has_property("Last Updated"):
@@ -746,12 +775,12 @@ col2.button("🫧 クリア", help="入力を空にします", on_click=_clear_t
 if run:
     term_val = st.session_state["term_input"].strip()
     if not term_val:
-        st.error("📌 単語・フレーズを入力してください。")
+        st.error("単語・フレーズを入力してください。")
     else:
         with st.spinner("OpenAI → Notion 連携中…"):
             try:
                 result = process_word(term_val)
-                st.success("☑️ 処理が完了しました！ 🎉")
+                st.success("処理が完了しました。")
                 st.write("**Word**:", result["word"])
                 st.write("**POS**:", result["pos"])
                 st.write("**Definition (JP)**:", result["definition_jp"])
